@@ -7,6 +7,8 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from .comparison import ComparisonAnalysis, analyze_comparison, metric_winner
+from .comparison_reporting import generate_comparison_report
 from .loader import load_experiment
 from .models import ExperimentData, Regime
 from .reporting import generate_report
@@ -20,12 +22,14 @@ class BurnerEyeReportApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("BurnerEye - формирование PDF-отчёта")
-        self.geometry("1280x820")
+        self.geometry("1360x860")
         self.minsize(1040, 680)
         self.configure(background="#F3F6FA")
 
         self.experiment: ExperimentData | None = None
         self.report_path: Path | None = None
+        self.comparison: ComparisonAnalysis | None = None
+        self.comparison_report_path: Path | None = None
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.busy = False
 
@@ -40,6 +44,18 @@ class BurnerEyeReportApp(tk.Tk):
             "untrained": tk.StringVar(value="0"),
             "conflicts": tk.StringVar(value="0"),
             "frames": tk.StringVar(value="0 / 0"),
+        }
+        self.comparison_first_path_var = tk.StringVar()
+        self.comparison_second_path_var = tk.StringVar()
+        self.comparison_status_var = tk.StringVar(
+            value="Выберите две папки с результатами предсказаний"
+        )
+        self.comparison_result_var = tk.StringVar(value="")
+        self.comparison_summary_vars = {
+            "common": tk.StringVar(value="0"),
+            "first_rows": tk.StringVar(value="0"),
+            "second_rows": tk.StringVar(value="0"),
+            "excluded": tk.StringVar(value="0 / 0"),
         }
 
         self._configure_styles()
@@ -68,7 +84,7 @@ class BurnerEyeReportApp(tk.Tk):
 
     def _build_ui(self) -> None:
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(3, weight=1)
+        self.rowconfigure(1, weight=1)
 
         header = ttk.Frame(self, padding=(22, 18, 22, 10))
         header.grid(row=0, column=0, sticky="ew")
@@ -80,8 +96,24 @@ class BurnerEyeReportApp(tk.Tk):
             style="Subtitle.TLabel",
         ).grid(row=1, column=0, sticky="w", pady=(3, 0))
 
-        chooser = ttk.Frame(self, style="Card.TFrame", padding=14)
-        chooser.grid(row=1, column=0, sticky="ew", padx=22, pady=(0, 10))
+        workspace_notebook = ttk.Notebook(self)
+        workspace_notebook.grid(
+            row=1,
+            column=0,
+            sticky="nsew",
+            padx=22,
+            pady=(0, 18),
+        )
+        report_workspace = ttk.Frame(workspace_notebook)
+        comparison_workspace = ttk.Frame(workspace_notebook)
+        workspace_notebook.add(report_workspace, text="Отчёт по одной модели")
+        workspace_notebook.add(comparison_workspace, text="Сравнение моделей")
+
+        report_workspace.columnconfigure(0, weight=1)
+        report_workspace.rowconfigure(2, weight=1)
+
+        chooser = ttk.Frame(report_workspace, style="Card.TFrame", padding=14)
+        chooser.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
         chooser.columnconfigure(0, weight=1)
         ttk.Entry(chooser, textvariable=self.path_var).grid(row=0, column=0, sticky="ew", padx=(0, 8))
         self.check_button = ttk.Button(
@@ -99,8 +131,8 @@ class BurnerEyeReportApp(tk.Tk):
         )
         self.choose_button.grid(row=0, column=2)
 
-        summary = ttk.Frame(self, padding=(22, 0, 22, 10))
-        summary.grid(row=2, column=0, sticky="ew")
+        summary = ttk.Frame(report_workspace, padding=(10, 0, 10, 10))
+        summary.grid(row=1, column=0, sticky="ew")
         for index in range(6):
             summary.columnconfigure(index, weight=1, uniform="summary")
         cards = [
@@ -117,8 +149,8 @@ class BurnerEyeReportApp(tk.Tk):
             ttk.Label(card, textvariable=self.summary_vars[key], style="Metric.TLabel").pack(anchor="w")
             ttk.Label(card, text=caption, style="MetricCaption.TLabel").pack(anchor="w")
 
-        notebook = ttk.Notebook(self)
-        notebook.grid(row=3, column=0, sticky="nsew", padx=22, pady=(0, 10))
+        notebook = ttk.Notebook(report_workspace)
+        notebook.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 10))
         regimes_tab = ttk.Frame(notebook, padding=10)
         issues_tab = ttk.Frame(notebook, padding=10)
         notebook.add(regimes_tab, text="Режимы")
@@ -214,8 +246,8 @@ class BurnerEyeReportApp(tk.Tk):
         issue_scroll.grid(row=0, column=1, sticky="ns")
         self.issue_tree.configure(yscrollcommand=issue_scroll.set)
 
-        footer = ttk.Frame(self, style="Card.TFrame", padding=(16, 12))
-        footer.grid(row=4, column=0, sticky="ew", padx=22, pady=(0, 18))
+        footer = ttk.Frame(report_workspace, style="Card.TFrame", padding=(16, 12))
+        footer.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
         footer.columnconfigure(1, weight=1)
         ttk.Label(footer, text="Порог существенного изменения, %:", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w")
         self.threshold_spinbox = ttk.Spinbox(
@@ -254,7 +286,214 @@ class BurnerEyeReportApp(tk.Tk):
             row=2, column=0, columnspan=4, sticky="ew", pady=(8, 0)
         )
 
+        self._build_comparison_tab(comparison_workspace)
         self._set_edit_controls(False)
+
+    def _build_comparison_tab(self, tab: ttk.Frame) -> None:
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(2, weight=1)
+
+        chooser = ttk.Frame(tab, style="Card.TFrame", padding=14)
+        chooser.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
+        chooser.columnconfigure(1, weight=1)
+        ttk.Label(
+            chooser,
+            text="Модель 1:",
+            style="CardTitle.TLabel",
+        ).grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(0, 8))
+        ttk.Entry(
+            chooser,
+            textvariable=self.comparison_first_path_var,
+        ).grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=(0, 8))
+        self.comparison_first_choose_button = ttk.Button(
+            chooser,
+            text="Выбрать папку",
+            style="Secondary.TButton",
+            command=lambda: self._choose_comparison_folder(1),
+        )
+        self.comparison_first_choose_button.grid(
+            row=0,
+            column=2,
+            padx=(0, 12),
+            pady=(0, 8),
+        )
+
+        ttk.Label(
+            chooser,
+            text="Модель 2:",
+            style="CardTitle.TLabel",
+        ).grid(row=1, column=0, sticky="w", padx=(0, 8))
+        ttk.Entry(
+            chooser,
+            textvariable=self.comparison_second_path_var,
+        ).grid(row=1, column=1, sticky="ew", padx=(0, 8))
+        self.comparison_second_choose_button = ttk.Button(
+            chooser,
+            text="Выбрать папку",
+            style="Secondary.TButton",
+            command=lambda: self._choose_comparison_folder(2),
+        )
+        self.comparison_second_choose_button.grid(
+            row=1,
+            column=2,
+            padx=(0, 12),
+        )
+        self.compare_button = ttk.Button(
+            chooser,
+            text="Проверить и сравнить",
+            style="Accent.TButton",
+            command=self._start_comparison,
+        )
+        self.compare_button.grid(
+            row=0,
+            column=3,
+            rowspan=2,
+            sticky="ns",
+        )
+
+        summary = ttk.Frame(tab, padding=(10, 0, 10, 10))
+        summary.grid(row=1, column=0, sticky="ew")
+        for index in range(4):
+            summary.columnconfigure(index, weight=1, uniform="comparison_summary")
+        cards = [
+            ("common", "общих режимов"),
+            ("first_rows", "строк модели 1 в общих режимах"),
+            ("second_rows", "строк модели 2 в общих режимах"),
+            ("excluded", "исключено режимов: модель 1 / 2"),
+        ]
+        for index, (key, caption) in enumerate(cards):
+            card = ttk.Frame(summary, style="Card.TFrame", padding=(12, 9))
+            card.grid(
+                row=0,
+                column=index,
+                sticky="nsew",
+                padx=(0 if index == 0 else 4, 0 if index == 3 else 4),
+            )
+            ttk.Label(
+                card,
+                textvariable=self.comparison_summary_vars[key],
+                style="Metric.TLabel",
+            ).pack(anchor="w")
+            ttk.Label(
+                card,
+                text=caption,
+                style="MetricCaption.TLabel",
+            ).pack(anchor="w")
+
+        table_container = ttk.Frame(tab, padding=(10, 0, 10, 10))
+        table_container.grid(row=2, column=0, sticky="nsew")
+        table_container.columnconfigure(0, weight=1)
+        table_container.rowconfigure(1, weight=1)
+        ttk.Label(
+            table_container,
+            text=(
+                "В таблице, PDF и CSV учитываются только режимы, "
+                "присутствующие у обеих моделей."
+            ),
+            style="Subtitle.TLabel",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 8))
+        table_frame = ttk.Frame(table_container, style="Card.TFrame")
+        table_frame.grid(row=1, column=0, sticky="nsew")
+        table_frame.columnconfigure(0, weight=1)
+        table_frame.rowconfigure(0, weight=1)
+        columns = (
+            "regime",
+            "first_rows",
+            "second_rows",
+            "first_mape",
+            "second_mape",
+            "winner",
+        )
+        self.comparison_tree = ttk.Treeview(
+            table_frame,
+            columns=columns,
+            show="headings",
+        )
+        headings = {
+            "regime": "Общий режим",
+            "first_rows": "Строк модели 1",
+            "second_rows": "Строк модели 2",
+            "first_mape": "MAPE топлива, модель 1",
+            "second_mape": "MAPE топлива, модель 2",
+            "winner": "Меньший MAPE топлива",
+        }
+        widths = {
+            "regime": 330,
+            "first_rows": 110,
+            "second_rows": 110,
+            "first_mape": 145,
+            "second_mape": 145,
+            "winner": 180,
+        }
+        for column in columns:
+            self.comparison_tree.heading(column, text=headings[column])
+            self.comparison_tree.column(
+                column,
+                width=widths[column],
+                minwidth=80,
+                stretch=column in {"regime", "winner"},
+                anchor="w" if column in {"regime", "winner"} else "center",
+            )
+        self.comparison_tree.grid(row=0, column=0, sticky="nsew")
+        scroll_y = ttk.Scrollbar(
+            table_frame,
+            orient="vertical",
+            command=self.comparison_tree.yview,
+        )
+        scroll_y.grid(row=0, column=1, sticky="ns")
+        scroll_x = ttk.Scrollbar(
+            table_frame,
+            orient="horizontal",
+            command=self.comparison_tree.xview,
+        )
+        scroll_x.grid(row=1, column=0, sticky="ew")
+        self.comparison_tree.configure(
+            yscrollcommand=scroll_y.set,
+            xscrollcommand=scroll_x.set,
+        )
+
+        footer = ttk.Frame(tab, style="Card.TFrame", padding=(16, 12))
+        footer.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
+        footer.columnconfigure(0, weight=1)
+        self.comparison_progress = ttk.Progressbar(
+            footer,
+            mode="determinate",
+            maximum=100,
+            value=0,
+        )
+        self.comparison_progress.grid(
+            row=0,
+            column=0,
+            sticky="ew",
+            padx=(0, 12),
+        )
+        self.comparison_report_button = ttk.Button(
+            footer,
+            text="Сформировать сравнительный PDF",
+            style="Accent.TButton",
+            command=self._start_comparison_report,
+            state="disabled",
+        )
+        self.comparison_report_button.grid(row=0, column=1)
+        ttk.Label(
+            footer,
+            textvariable=self.comparison_status_var,
+            background="#FFFFFF",
+            foreground="#425466",
+        ).grid(row=1, column=0, sticky="w", pady=(8, 0))
+        self.comparison_open_button = ttk.Button(
+            footer,
+            text="Открыть папку отчёта",
+            style="Secondary.TButton",
+            command=self._open_comparison_report_folder,
+            state="disabled",
+        )
+        self.comparison_open_button.grid(row=1, column=1, sticky="e", pady=(8, 0))
+        ttk.Entry(
+            footer,
+            textvariable=self.comparison_result_var,
+            state="readonly",
+        ).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
 
     def _choose_folder(self) -> None:
         selected = filedialog.askdirectory(
@@ -264,6 +503,19 @@ class BurnerEyeReportApp(tk.Tk):
         if selected:
             self.path_var.set(selected)
             self._start_loading()
+
+    def _choose_comparison_folder(self, position: int) -> None:
+        target = (
+            self.comparison_first_path_var
+            if position == 1
+            else self.comparison_second_path_var
+        )
+        selected = filedialog.askdirectory(
+            title=f"Выберите папку результатов для модели {position}",
+            initialdir=target.get() or str(Path.cwd()),
+        )
+        if selected:
+            target.set(selected)
 
     def _start_loading(self) -> None:
         if self.busy:
@@ -287,6 +539,51 @@ class BurnerEyeReportApp(tk.Tk):
                 self.events.put(("loaded", result))
             except Exception as exc:
                 self.events.put(("load_error", exc))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _start_comparison(self) -> None:
+        if self.busy:
+            return
+        first_path = self.comparison_first_path_var.get().strip()
+        second_path = self.comparison_second_path_var.get().strip()
+        if not first_path or not second_path:
+            messagebox.showwarning(
+                "Папки не выбраны",
+                "Укажите две папки с результатами предсказаний.",
+            )
+            return
+        try:
+            if Path(first_path).expanduser().resolve() == Path(
+                second_path
+            ).expanduser().resolve():
+                raise ValueError(
+                    "Для сравнения выберите две разные папки с результатами."
+                )
+        except OSError as exc:
+            messagebox.showerror("Некорректный путь", str(exc))
+            return
+
+        self.busy = True
+        self.comparison = None
+        self.comparison_report_path = None
+        self.comparison_result_var.set("")
+        self.comparison_status_var.set(
+            "Проверка results.csv и поиск общих режимов…"
+        )
+        self.comparison_progress.configure(mode="indeterminate")
+        self.comparison_progress.start(12)
+        self._clear_comparison()
+        self._set_busy_controls()
+
+        def work() -> None:
+            try:
+                first = load_experiment(first_path)
+                second = load_experiment(second_path)
+                result = analyze_comparison(first, second)
+                self.events.put(("comparison_loaded", result))
+            except Exception as exc:
+                self.events.put(("comparison_load_error", exc))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -333,6 +630,32 @@ class BurnerEyeReportApp(tk.Tk):
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _start_comparison_report(self) -> None:
+        if self.busy or self.comparison is None:
+            return
+        self.busy = True
+        self.comparison_report_path = None
+        self.comparison_result_var.set("")
+        self.comparison_status_var.set("Подготовка сравнительного отчёта…")
+        self.comparison_progress.stop()
+        self.comparison_progress.configure(mode="determinate", value=0)
+        self._set_busy_controls()
+
+        def progress(value: int, text: str) -> None:
+            self.events.put(("comparison_progress", (value, text)))
+
+        def work() -> None:
+            try:
+                report_path = generate_comparison_report(
+                    self.comparison,
+                    progress=progress,
+                )
+                self.events.put(("comparison_report_ready", report_path))
+            except Exception as exc:
+                self.events.put(("comparison_report_error", exc))
+
+        threading.Thread(target=work, daemon=True).start()
+
     def _poll_events(self) -> None:
         try:
             while True:
@@ -349,6 +672,24 @@ class BurnerEyeReportApp(tk.Tk):
                     self._finish_report(payload)
                 elif event == "report_error":
                     self._finish_error("Не удалось сформировать отчёт", payload)
+                elif event == "comparison_loaded":
+                    self._finish_comparison_loading(payload)
+                elif event == "comparison_load_error":
+                    self._finish_comparison_error(
+                        "Не удалось сравнить модели",
+                        payload,
+                    )
+                elif event == "comparison_progress":
+                    value, text = payload
+                    self.comparison_progress.configure(value=value)
+                    self.comparison_status_var.set(str(text))
+                elif event == "comparison_report_ready":
+                    self._finish_comparison_report(payload)
+                elif event == "comparison_report_error":
+                    self._finish_comparison_error(
+                        "Не удалось сформировать сравнительный отчёт",
+                        payload,
+                    )
         except queue.Empty:
             pass
         self.after(100, self._poll_events)
@@ -385,11 +726,50 @@ class BurnerEyeReportApp(tk.Tk):
             f"Отчёт сохранён:\n{report_path}",
         )
 
+    def _finish_comparison_loading(self, comparison: object) -> None:
+        assert isinstance(comparison, ComparisonAnalysis)
+        self.busy = False
+        self.comparison = comparison
+        self.comparison_progress.stop()
+        self.comparison_progress.configure(mode="determinate", value=0)
+        self._populate_comparison()
+        excluded_count = len(comparison.first_only_regimes) + len(
+            comparison.second_only_regimes
+        )
+        self.comparison_status_var.set(
+            f"Найдено общих режимов: {len(comparison.common_regimes)}. "
+            f"Исключено режимов вне пересечения: {excluded_count}."
+        )
+        self._refresh_controls()
+
+    def _finish_comparison_report(self, report_path: object) -> None:
+        assert isinstance(report_path, Path)
+        self.busy = False
+        self.comparison_report_path = report_path
+        self.comparison_progress.configure(value=100)
+        self.comparison_status_var.set(
+            "Сравнительный PDF и расчётные CSV сформированы и проверены."
+        )
+        self.comparison_result_var.set(str(report_path))
+        self._refresh_controls()
+        messagebox.showinfo(
+            "Сравнительный отчёт готов",
+            f"Отчёт сохранён:\n{report_path}",
+        )
+
     def _finish_error(self, title: str, error: object) -> None:
         self.busy = False
         self.progress.stop()
         self.progress.configure(mode="determinate", value=0)
         self.status_var.set(str(error))
+        self._refresh_controls()
+        messagebox.showerror(title, str(error))
+
+    def _finish_comparison_error(self, title: str, error: object) -> None:
+        self.busy = False
+        self.comparison_progress.stop()
+        self.comparison_progress.configure(mode="determinate", value=0)
+        self.comparison_status_var.set(str(error))
         self._refresh_controls()
         messagebox.showerror(title, str(error))
 
@@ -415,6 +795,55 @@ class BurnerEyeReportApp(tk.Tk):
                 tags=(issue.severity,),
             )
         self._refresh_summary()
+
+    def _clear_comparison(self) -> None:
+        for item in self.comparison_tree.get_children():
+            self.comparison_tree.delete(item)
+        for value in self.comparison_summary_vars.values():
+            value.set("0")
+
+    def _populate_comparison(self) -> None:
+        self._clear_comparison()
+        comparison = self.comparison
+        if comparison is None:
+            return
+        for index, item in enumerate(comparison.common_regimes, start=1):
+            winner = metric_winner(
+                item.first_metrics.mape_fuel,
+                item.second_metrics.mape_fuel,
+                comparison.first_name,
+                comparison.second_name,
+            )
+            self.comparison_tree.insert(
+                "",
+                "end",
+                iid=f"common_{index}",
+                values=(
+                    item.display_name,
+                    len(item.first_regime.rows),
+                    len(item.second_regime.rows),
+                    self._format_gui_mape(item.first_metrics.mape_fuel),
+                    self._format_gui_mape(item.second_metrics.mape_fuel),
+                    winner,
+                ),
+            )
+        self.comparison_summary_vars["common"].set(
+            str(len(comparison.common_regimes))
+        )
+        self.comparison_summary_vars["first_rows"].set(
+            str(comparison.first_overall_metrics.record_count)
+        )
+        self.comparison_summary_vars["second_rows"].set(
+            str(comparison.second_overall_metrics.record_count)
+        )
+        self.comparison_summary_vars["excluded"].set(
+            f"{len(comparison.first_only_regimes)} / "
+            f"{len(comparison.second_only_regimes)}"
+        )
+
+    @staticmethod
+    def _format_gui_mape(value: float | None) -> str:
+        return "Нет данных" if value is None else f"{value:.3f}%"
 
     def _upsert_regime(self, regime: Regime) -> None:
         check_label = (
@@ -498,12 +927,20 @@ class BurnerEyeReportApp(tk.Tk):
         self.check_button.configure(state="disabled")
         self.report_button.configure(state="disabled")
         self.open_button.configure(state="disabled")
+        self.comparison_first_choose_button.configure(state="disabled")
+        self.comparison_second_choose_button.configure(state="disabled")
+        self.compare_button.configure(state="disabled")
+        self.comparison_report_button.configure(state="disabled")
+        self.comparison_open_button.configure(state="disabled")
         self._set_edit_controls(False)
 
     def _refresh_controls(self) -> None:
         state = "disabled" if self.busy else "normal"
         self.choose_button.configure(state=state)
         self.check_button.configure(state=state)
+        self.comparison_first_choose_button.configure(state=state)
+        self.comparison_second_choose_button.configure(state=state)
+        self.compare_button.configure(state=state)
         self._set_edit_controls(not self.busy and self.experiment is not None)
         self.report_button.configure(
             state=(
@@ -511,6 +948,22 @@ class BurnerEyeReportApp(tk.Tk):
                 if not self.busy
                 and self.experiment is not None
                 and self.experiment.can_generate
+                else "disabled"
+            )
+        )
+        self.comparison_report_button.configure(
+            state=(
+                "normal"
+                if not self.busy and self.comparison is not None
+                else "disabled"
+            )
+        )
+        self.comparison_open_button.configure(
+            state=(
+                "normal"
+                if not self.busy
+                and self.comparison_report_path is not None
+                and self.comparison_report_path.exists()
                 else "disabled"
             )
         )
@@ -538,8 +991,15 @@ class BurnerEyeReportApp(tk.Tk):
         except OSError as exc:
             messagebox.showerror("Не удалось открыть папку", str(exc))
 
+    def _open_comparison_report_folder(self) -> None:
+        if self.comparison_report_path is None:
+            return
+        try:
+            os.startfile(str(self.comparison_report_path.parent))
+        except OSError as exc:
+            messagebox.showerror("Не удалось открыть папку", str(exc))
+
 
 def run() -> None:
     app = BurnerEyeReportApp()
     app.mainloop()
-

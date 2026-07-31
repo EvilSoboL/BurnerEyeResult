@@ -24,14 +24,51 @@
 - сохраняет девять расчётных CSV и `processing.log`;
 - проверяет сформированный PDF повторным открытием.
 
-## Запуск
+## Запуск готового EXE
+
+Запустите:
+
+```powershell
+.\run.bat
+```
+
+Батник автоматически:
+
+1. проверит наличие `dist\BurnerEyeReport.exe`;
+2. сравнит дату EXE с исходниками и файлами зависимостей;
+3. через `update_exe.bat` вызовет `build_exe.bat`, если EXE отсутствует или устарел;
+4. запустит актуальный `BurnerEyeReport.exe`.
+
+При первой сборке `build_exe.bat` создаёт `.venv`, если её ещё нет, устанавливает
+зависимости из `requirements-build.txt` и формирует однофайловое Windows-приложение:
+
+```text
+dist\BurnerEyeReport.exe
+```
+
+Для ручной пересборки:
+
+```powershell
+.\build_exe.bat
+```
+
+Для проверки и обновления EXE без запуска приложения:
+
+```powershell
+.\update_exe.bat
+```
+
+Для сборки и автоматического обновления требуется Python 3.10 или новее.
+На компьютере, где запускается уже актуальный EXE, Python не требуется.
+
+## Запуск из исходников
 
 Требуется Python 3.10 или новее.
 
 ```powershell
-py -3.10 -m venv .venv
+py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\run.bat
+.\run_python.bat
 ```
 
 Или:

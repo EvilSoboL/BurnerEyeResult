@@ -1,13 +1,21 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-if not exist ".venv\Scripts\python.exe" (
-    echo Virtual environment not found. Run:
-    echo   py -3.10 -m venv .venv
-    echo   .venv\Scripts\python.exe -m pip install -r requirements.txt
+
+set "EXE=dist\BurnerEyeReport.exe"
+
+call update_exe.bat
+if errorlevel 1 (
+    echo [ERROR] Could not update the application.
     pause
     exit /b 1
 )
-".venv\Scripts\python.exe" main.py
-if errorlevel 1 pause
 
+echo [INFO] Starting %EXE%...
+start "" /wait "%EXE%" %*
+set "APP_EXIT_CODE=%ERRORLEVEL%"
+if not "%APP_EXIT_CODE%"=="0" (
+    echo [ERROR] Application exited with code %APP_EXIT_CODE%.
+    pause
+)
+exit /b %APP_EXIT_CODE%

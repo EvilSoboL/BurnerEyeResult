@@ -187,16 +187,22 @@ def _write_all_csv(analysis: AnalysisResult, csv_dir: Path) -> None:
         timeline_rows.append(
             {
                 **base,
+                "timestamp_type": "processing_time",
+                **_video_metadata_fields(row.video_metadata),
                 "expected_fuel_g_h": row.expected_fuel_g_h,
                 "predicted_fuel_g_h": row.predicted_fuel_g_h,
                 "absolute_error_fuel_g_h": metrics["absolute_error_fuel"],
                 "absolute_percentage_error_fuel_percent": metrics["ape_fuel"],
+                "fuel_prediction_available": int(row.predicted_fuel_g_h is not None),
                 "fuel_mape_excluded": int(metrics["ape_fuel"] is None),
+                "fuel_mape_exclusion_reason": _mape_exclusion_reason(row.predicted_fuel_g_h, row.expected_fuel_g_h, metrics["ape_fuel"]),
                 "expected_steam_g_h": row.expected_steam_g_h,
                 "predicted_steam_g_h": row.predicted_steam_g_h,
                 "absolute_error_steam_g_h": metrics["absolute_error_steam"],
                 "absolute_percentage_error_steam_percent": metrics["ape_steam"],
+                "steam_prediction_available": int(row.predicted_steam_g_h is not None),
                 "steam_mape_excluded": int(metrics["ape_steam"] is None),
+                "steam_mape_exclusion_reason": _mape_exclusion_reason(row.predicted_steam_g_h, row.expected_steam_g_h, metrics["ape_steam"]),
             }
         )
         distribution_rows.append(
@@ -216,16 +222,25 @@ def _write_all_csv(analysis: AnalysisResult, csv_dir: Path) -> None:
             "regime_name",
             "status",
             "source_unit",
+            "timestamp_type",
+            "source_video",
+            "video_start_s",
+            "video_end_s",
+            "source_frame_indices",
             "expected_fuel_g_h",
             "predicted_fuel_g_h",
             "absolute_error_fuel_g_h",
             "absolute_percentage_error_fuel_percent",
             "fuel_mape_excluded",
+            "fuel_prediction_available",
+            "fuel_mape_exclusion_reason",
             "expected_steam_g_h",
             "predicted_steam_g_h",
             "absolute_error_steam_g_h",
             "absolute_percentage_error_steam_percent",
             "steam_mape_excluded",
+            "steam_prediction_available",
+            "steam_mape_exclusion_reason",
         ],
     )
     _write_csv(
@@ -253,6 +268,8 @@ def _write_all_csv(analysis: AnalysisResult, csv_dir: Path) -> None:
                 "rank": selected.rank,
                 "frame_id": row.frame_id,
                 "timestamp": row.timestamp.isoformat(timespec="milliseconds"),
+                "timestamp_type": "processing_time",
+                **_video_metadata_fields(row.video_metadata),
                 "regime_id": row.regime_id,
                 "regime_name": regime.display_name,
                 "status": "trained" if regime.final_status else "untrained",
@@ -261,10 +278,14 @@ def _write_all_csv(analysis: AnalysisResult, csv_dir: Path) -> None:
                 "predicted_fuel_g_h": row.predicted_fuel_g_h,
                 "absolute_error_fuel_g_h": selected.abs_error_fuel,
                 "absolute_percentage_error_fuel_percent": selected.ape_fuel,
+                "fuel_prediction_available": int(row.predicted_fuel_g_h is not None),
+                "fuel_mape_exclusion_reason": _mape_exclusion_reason(row.predicted_fuel_g_h, row.expected_fuel_g_h, selected.ape_fuel),
                 "expected_steam_g_h": row.expected_steam_g_h,
                 "predicted_steam_g_h": row.predicted_steam_g_h,
                 "absolute_error_steam_g_h": selected.abs_error_steam,
                 "absolute_percentage_error_steam_percent": selected.ape_steam,
+                "steam_prediction_available": int(row.predicted_steam_g_h is not None),
+                "steam_mape_exclusion_reason": _mape_exclusion_reason(row.predicted_steam_g_h, row.expected_steam_g_h, selected.ape_steam),
                 "frame_error_score": selected.score,
                 "score_method": selected.score_method,
             }
@@ -277,6 +298,11 @@ def _write_all_csv(analysis: AnalysisResult, csv_dir: Path) -> None:
             "rank",
             "frame_id",
             "timestamp",
+            "timestamp_type",
+            "source_video",
+            "video_start_s",
+            "video_end_s",
+            "source_frame_indices",
             "regime_id",
             "regime_name",
             "status",
@@ -285,10 +311,14 @@ def _write_all_csv(analysis: AnalysisResult, csv_dir: Path) -> None:
             "predicted_fuel_g_h",
             "absolute_error_fuel_g_h",
             "absolute_percentage_error_fuel_percent",
+            "fuel_prediction_available",
+            "fuel_mape_exclusion_reason",
             "expected_steam_g_h",
             "predicted_steam_g_h",
             "absolute_error_steam_g_h",
             "absolute_percentage_error_steam_percent",
+            "steam_prediction_available",
+            "steam_mape_exclusion_reason",
             "frame_error_score",
             "score_method",
         ],
@@ -330,12 +360,33 @@ def _metric_fields() -> list[str]:
     return [
         "record_count",
         "mae_fuel_g_h",
+        "mae_fuel_record_count",
         "mape_fuel_percent",
         "mape_fuel_record_count",
         "mae_steam_g_h",
+        "mae_steam_record_count",
         "mape_steam_percent",
         "mape_steam_record_count",
     ]
+
+
+def _video_metadata_fields(metadata) -> dict[str, object]:
+    if metadata is None:
+        return {"source_video": "", "video_start_s": "", "video_end_s": "", "source_frame_indices": ""}
+    return {
+        "source_video": metadata.source_video,
+        "video_start_s": metadata.start_s,
+        "video_end_s": metadata.end_s,
+        "source_frame_indices": ";".join(str(index) for index in metadata.source_frame_indices),
+    }
+
+
+def _mape_exclusion_reason(prediction: float | None, expected: float, ape: float | None) -> str:
+    if prediction is None:
+        return "prediction_missing"
+    if expected == 0 and ape is None:
+        return "expected_zero"
+    return ""
 
 
 def _stage_csv_row(
@@ -465,6 +516,8 @@ def _build_pdf(analysis: AnalysisResult, path: Path) -> None:
             Spacer(1, 12 * mm),
             _summary_panel(analysis, styles),
             Spacer(1, 8 * mm),
+            Paragraph(_prediction_coverage_text(analysis), styles["note"]),
+            Spacer(1, 4 * mm),
             Paragraph(
                 "Итоговые метрики: только MAE и MAPE. Все расходы и MAE "
                 "приведены к базовой единице г/ч.",
@@ -556,6 +609,15 @@ def _summary_panel(analysis: AnalysisResult, styles: dict[str, ParagraphStyle]) 
         )
     )
     return table
+
+
+def _prediction_coverage_text(analysis: AnalysisResult) -> str:
+    experiment = analysis.experiment
+    return (
+        "Прогнозы по каналам: "
+        f"топливо — {experiment.predicted_fuel_count}; "
+        f"пар — {experiment.predicted_steam_count}."
+    )
 
 
 def _panel_value(
@@ -766,10 +828,10 @@ def _regime_summary_section(
                 regime.display_name,
                 status_label(bool(regime.final_status)),
                 str(metrics.record_count),
-                _fmt(metrics.mae_fuel),
-                _fmt_mape(metrics.mape_fuel),
-                _fmt(metrics.mae_steam),
-                _fmt_mape(metrics.mape_steam),
+                _fmt_mae(metrics.mae_fuel, metrics.mae_fuel_count),
+                _fmt_mape_metric(metrics.mape_fuel, metrics.mae_fuel_count, metrics.mape_fuel_count),
+                _fmt_mae(metrics.mae_steam, metrics.mae_steam_count),
+                _fmt_mape_metric(metrics.mape_steam, metrics.mae_steam_count, metrics.mape_steam_count),
             ]
         )
     return [
@@ -821,8 +883,8 @@ def _regime_section(
         _table(
             [
                 ["Показатель", "Топливо", "Пар"],
-                ["MAE, г/ч", _fmt(metrics.mae_fuel), _fmt(metrics.mae_steam)],
-                ["MAPE, %", _fmt_mape(metrics.mape_fuel), _fmt_mape(metrics.mape_steam)],
+                ["MAE, г/ч", _fmt_mae(metrics.mae_fuel, metrics.mae_fuel_count), _fmt_mae(metrics.mae_steam, metrics.mae_steam_count)],
+                ["MAPE, %", _fmt_mape_metric(metrics.mape_fuel, metrics.mae_fuel_count, metrics.mape_fuel_count), _fmt_mape_metric(metrics.mape_steam, metrics.mae_steam_count, metrics.mape_steam_count)],
             ],
             [55 * mm, 57 * mm, 57 * mm],
             styles,
@@ -898,8 +960,9 @@ def _regime_section(
                     Paragraph("Топливо", styles["h2"]),
                     HistogramFlowable(
                         [
-                            float(row_metrics[row.frame_id]["signed_error_fuel"] or 0.0)
+                            float(value)
                             for row in rows
+                            if (value := row_metrics[row.frame_id]["signed_error_fuel"]) is not None
                         ],
                         "Ошибка топлива, г/ч",
                         font_name=font_name,
@@ -917,8 +980,9 @@ def _regime_section(
                     Paragraph("Пар", styles["h2"]),
                     HistogramFlowable(
                         [
-                            float(row_metrics[row.frame_id]["signed_error_steam"] or 0.0)
+                            float(value)
                             for row in rows
+                            if (value := row_metrics[row.frame_id]["signed_error_steam"]) is not None
                         ],
                         "Ошибка пара, г/ч",
                         font_name=font_name,
@@ -950,7 +1014,7 @@ def _overall_distribution_section(
         ),
         Spacer(1, 3 * mm),
         HistogramFlowable(
-            [float(item["signed_error_fuel"] or 0.0) for item in metrics.values()],
+            [float(value) for item in metrics.values() if (value := item["signed_error_fuel"]) is not None],
             "Ошибка топлива, г/ч",
             font_name=font_name,
             color=ACCENT,
@@ -958,7 +1022,7 @@ def _overall_distribution_section(
         Paragraph(analysis.error_conclusions["overall_fuel"], styles["conclusion"]),
         Spacer(1, 5 * mm),
         HistogramFlowable(
-            [float(item["signed_error_steam"] or 0.0) for item in metrics.values()],
+            [float(value) for item in metrics.values() if (value := item["signed_error_steam"]) is not None],
             "Ошибка пара, г/ч",
             font_name=font_name,
             color=TEAL,
@@ -1008,15 +1072,19 @@ def _frame_card(
     image.drawHeight = image.imageHeight * scale
     details = [
         [f"{selected.label} #{selected.rank}", f"frame_id: {row.frame_id}"],
-        ["Дата и время", row.timestamp.strftime("%d.%m.%Y %H:%M:%S.%f")[:-3]],
+        ["Время обработки", row.timestamp.strftime("%d.%m.%Y %H:%M:%S.%f")[:-3]],
         ["Режим", regime.display_name],
         ["Статус", status_label(bool(regime.final_status))],
-        ["Топливо факт / прогноз", f"{_fmt(row.expected_fuel_g_h)} / {_fmt(row.predicted_fuel_g_h)} г/ч"],
-        ["Ошибка топлива", f"{_fmt(selected.abs_error_fuel)} г/ч; {_fmt_mape(selected.ape_fuel)}"],
-        ["Пар факт / прогноз", f"{_fmt(row.expected_steam_g_h)} / {_fmt(row.predicted_steam_g_h)} г/ч"],
-        ["Ошибка пара", f"{_fmt(selected.abs_error_steam)} г/ч; {_fmt_mape(selected.ape_steam)}"],
+        ["Топливо факт / прогноз", f"{_fmt(row.expected_fuel_g_h)} / {_fmt_prediction(row.predicted_fuel_g_h)} г/ч"],
+        ["Ошибка топлива", f"{_fmt_error(selected.abs_error_fuel)} г/ч; {_fmt_mape_prediction(row.predicted_fuel_g_h, row.expected_fuel_g_h, selected.ape_fuel)}"],
+        ["Пар факт / прогноз", f"{_fmt(row.expected_steam_g_h)} / {_fmt_prediction(row.predicted_steam_g_h)} г/ч"],
+        ["Ошибка пара", f"{_fmt_error(selected.abs_error_steam)} г/ч; {_fmt_mape_prediction(row.predicted_steam_g_h, row.expected_steam_g_h, selected.ape_steam)}"],
         ["Оценка кадра", f"{selected.score:.3f}; {selected.score_method}"],
     ]
+    if row.video_metadata is not None:
+        video = row.video_metadata
+        details.append(["Видео / окно", f"{video.source_video}; {video.start_s:g}–{video.end_s:g} с"])
+        details.append(["Индексы видео", _frame_indices_summary(video.source_frame_indices)])
     details_table = _table(details, [34 * mm, 65 * mm], styles, font_size=7)
     card = Table([[image, details_table]], colWidths=[76 * mm, 100 * mm])
     card.setStyle(
@@ -1176,10 +1244,10 @@ def _metrics_row(label: str, metrics: MetricSet) -> list[str]:
     return [
         label,
         str(metrics.record_count),
-        _fmt(metrics.mae_fuel),
-        _fmt_mape(metrics.mape_fuel),
-        _fmt(metrics.mae_steam),
-        _fmt_mape(metrics.mape_steam),
+        _fmt_mae(metrics.mae_fuel, metrics.mae_fuel_count),
+        _fmt_mape_metric(metrics.mape_fuel, metrics.mae_fuel_count, metrics.mape_fuel_count),
+        _fmt_mae(metrics.mae_steam, metrics.mae_steam_count),
+        _fmt_mape_metric(metrics.mape_steam, metrics.mae_steam_count, metrics.mape_steam_count),
     ]
 
 
@@ -1391,9 +1459,13 @@ class LineChartFlowable(Flowable):
         left, right, bottom, top = 50, 12, 34, 30
         chart_w = self.width - left - right
         chart_h = self.height - bottom - top
+        series = {
+            name: sequence for name, sequence in self.series.items()
+            if any(value is not None and math.isfinite(float(value)) for value in sequence)
+        }
         values = [
             float(value)
-            for sequence in self.series.values()
+            for sequence in series.values()
             for value in sequence
             if value is not None and math.isfinite(float(value))
         ]
@@ -1437,7 +1509,7 @@ class LineChartFlowable(Flowable):
         canvas.restoreState()
 
         palette = [ACCENT, TEAL, ORANGE, PURPLE, RED, colors.HexColor("#556270")]
-        for series_index, (name, sequence) in enumerate(self.series.items()):
+        for series_index, (name, sequence) in enumerate(series.items()):
             color = palette[series_index % len(palette)]
             canvas.setStrokeColor(color)
             canvas.setFillColor(color)
@@ -1454,7 +1526,7 @@ class LineChartFlowable(Flowable):
                 if len(sequence) <= 40:
                     canvas.circle(x, y, 1.8, fill=1, stroke=0)
                 previous = (x, y)
-            legend_x = left + series_index * (chart_w / max(1, len(self.series)))
+            legend_x = left + series_index * (chart_w / max(1, len(series)))
             canvas.rect(legend_x, self.height - 14, 8, 3, fill=1, stroke=0)
             canvas.setFont(self.font_name, 7)
             canvas.drawString(legend_x + 11, self.height - 15, name[:28])
@@ -1497,12 +1569,21 @@ class BarChartFlowable(Flowable):
         left, right, bottom, top = 50, 12, 42, 28
         chart_w = self.width - left - right
         chart_h = self.height - bottom - top
+        series = {
+            name: sequence for name, sequence in self.series.items()
+            if any(value is not None and math.isfinite(float(value)) for value in sequence)
+        }
         values = [
             float(value)
-            for sequence in self.series.values()
+            for sequence in series.values()
             for value in sequence
             if value is not None
         ]
+        if not values:
+            canvas.setFont("BurnerEyeRegular", 9)
+            canvas.setFillColor(MUTED)
+            canvas.drawCentredString(self.width / 2, self.height / 2, "Нет прогнозов для отображения")
+            return
         max_value = max(values, default=1.0) or 1.0
         canvas.setFont("BurnerEyeRegular", 7)
         canvas.setFillColor(MUTED)
@@ -1513,10 +1594,10 @@ class BarChartFlowable(Flowable):
             canvas.line(left, y, left + chart_w, y)
             canvas.drawRightString(left - 5, y - 2, _axis_number(max_value * ratio))
         group_width = chart_w / max(1, len(self.groups))
-        bar_count = max(1, len(self.series))
+        bar_count = max(1, len(series))
         bar_width = min(22.0, group_width * 0.7 / bar_count)
         palette = [ACCENT, TEAL, ORANGE, PURPLE]
-        for series_index, (name, sequence) in enumerate(self.series.items()):
+        for series_index, (name, sequence) in enumerate(series.items()):
             color = palette[series_index % len(palette)]
             canvas.setFillColor(color)
             for group_index, value in enumerate(sequence):
@@ -1567,7 +1648,12 @@ class HistogramFlowable(Flowable):
         left, right, bottom, top = 42, 12, 38, 12
         chart_w = self.width - left - right
         chart_h = self.height - bottom - top
-        values = self.values or [0.0]
+        if not self.values:
+            canvas.setFont(self.font_name, 9)
+            canvas.setFillColor(MUTED)
+            canvas.drawCentredString(self.width / 2, self.height / 2, "Нет прогнозов для отображения")
+            return
+        values = self.values
         minimum, maximum = min(values), max(values)
         if minimum == maximum:
             minimum -= 1.0
@@ -1613,6 +1699,40 @@ class HistogramFlowable(Flowable):
 
 def _fmt(value: float | None) -> str:
     return "Нет данных" if value is None else f"{value:.3f}"
+
+
+def _fmt_mae(value: float | None, prediction_count: int) -> str:
+    return "Нет прогнозов" if prediction_count == 0 else _fmt(value)
+
+
+def _fmt_prediction(value: float | None) -> str:
+    return "Нет прогнозов" if value is None else _fmt(value)
+
+
+def _fmt_error(value: float | None) -> str:
+    return "Нет прогнозов" if value is None else _fmt(value)
+
+
+def _fmt_mape_metric(value: float | None, prediction_count: int, mape_count: int) -> str:
+    if prediction_count == 0:
+        return "Нет прогнозов"
+    if mape_count == 0:
+        return "MAPE не определён: нулевой факт"
+    return _fmt_mape(value)
+
+
+def _fmt_mape_prediction(prediction: float | None, expected: float, value: float | None) -> str:
+    if prediction is None:
+        return "Нет прогнозов"
+    if expected == 0:
+        return "MAPE не определён: нулевой факт"
+    return _fmt_mape(value)
+
+
+def _frame_indices_summary(indices: list[int]) -> str:
+    if len(indices) <= 8:
+        return "; ".join(str(value) for value in indices)
+    return f"{indices[0]}; {indices[1]}; …; {indices[-2]}; {indices[-1]} ({len(indices)} кадров)"
 
 
 def _fmt_mape(value: float | None) -> str:

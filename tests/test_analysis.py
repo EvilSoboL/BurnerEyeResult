@@ -227,6 +227,31 @@ class LoaderTests(unittest.TestCase):
                 any(issue.code == "duplicate_frame_id" for issue in experiment.issues)
             )
 
+    def test_missing_and_corrupt_jpegs_keep_rows_but_exclude_frames(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = datetime(2026, 7, 1, 12, 0, 0)
+            rows = [
+                csv_row(index, timestamp=now + timedelta(seconds=index))
+                for index in range(1, 7)
+            ]
+            write_experiment(root, rows)
+            frames = root / "frames"
+            (frames / "1.jpg").unlink()
+            (frames / "2.jpg").write_bytes(b"not a jpeg")
+
+            experiment = load_experiment(root)
+            analysis = analyze_experiment(experiment)
+
+            self.assertEqual(len(experiment.rows), 6)
+            self.assertEqual(experiment.excluded_rows, 0)
+            self.assertEqual(experiment.primary_frame_count, 4)
+            self.assertEqual(len(analysis.selected_frames), 4)
+            codes = {issue.code for issue in experiment.issues}
+            self.assertIn("corrupt_frame", codes)
+            self.assertIn("missing_primary_frames", codes)
+            self.assertTrue(all(selected.row.image_path is not None for selected in analysis.selected_frames))
+
 
 class MetricsTests(unittest.TestCase):
     def test_mixed_channel_metrics_and_frame_selection(self) -> None:

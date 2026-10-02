@@ -8,7 +8,7 @@ from pathlib import Path
 
 from pypdf import PdfReader
 
-from burner_eye_report.comparison import analyze_comparison
+from burner_eye_report.comparison import analyze_comparison, metric_winner
 from burner_eye_report.comparison_reporting import generate_comparison_report
 from burner_eye_report.loader import load_experiment
 
@@ -64,6 +64,112 @@ def result_row(
 
 
 class ComparisonTests(unittest.TestCase):
+    def test_compares_only_common_targets(self) -> None:
+        cases = (("fuel", "fuel", {"fuel"}), ("steam", "steam", {"steam"}), ("both", "fuel", {"fuel"}))
+        for first_target, second_target, expected in cases:
+            with self.subTest(first=first_target, second=second_target), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                start = datetime(2026, 7, 30, 12, 0)
+                first_rows = [result_row(f"a{index}", start + timedelta(seconds=index), fuel=100, steam=50, predicted_fuel=105 if first_target in {"fuel", "both"} else "", predicted_steam=48 if first_target in {"steam", "both"} else "") for index in range(3)]
+                second_rows = [result_row(f"b{index}", start + timedelta(seconds=index), fuel=100, steam=50, predicted_fuel=105 if second_target in {"fuel", "both"} else "", predicted_steam=48 if second_target in {"steam", "both"} else "") for index in range(3)]
+                first_root, second_root = root / "first", root / "second"
+                write_results(first_root, first_rows)
+                write_results(second_root, second_rows)
+
+                comparison = analyze_comparison(load_experiment(first_root), load_experiment(second_root))
+
+                self.assertEqual(comparison.comparable_targets, expected)
+                if first_target == second_target:
+                    pdf = generate_comparison_report(comparison)
+                    self.assertGreaterEqual(len(PdfReader(str(pdf)).pages), 1)
+                    self.assertTrue((pdf.parent / "csv" / "overall_model_comparison.csv").is_file())
+        self.assertEqual(metric_winner(None, 1.0, "first", "second"), "Нет сопоставимых данных")
+        self.assertEqual(metric_winner(1.0, 1.0, "first", "second"), "Одинаково")
+
+    def test_different_targets_fail_even_with_shared_physical_regime(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            start = datetime(2026, 7, 30, 12, 0)
+            fuel_rows = [result_row(f"f{index}", start + timedelta(seconds=index), fuel=100, steam=50, predicted_fuel=105, predicted_steam="") for index in range(3)]
+            steam_rows = [result_row(f"s{index}", start + timedelta(seconds=index), fuel=100, steam=50, predicted_fuel="", predicted_steam=48) for index in range(3)]
+            first, second = root / "fuel", root / "steam"
+            write_results(first, fuel_rows)
+            write_results(second, steam_rows)
+
+            with self.assertRaisesRegex(ValueError, "общей предсказываемой величины"):
+                analyze_comparison(load_experiment(first), load_experiment(second))
+
+    def test_common_target_must_exist_inside_regime_intersection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            start = datetime(2026, 7, 30, 12, 0)
+            first_rows = [result_row(f"a{index}", start + timedelta(seconds=index), fuel=100, steam=50, predicted_fuel=105, predicted_steam="") for index in range(3)]
+            first_rows += [result_row(f"b{index}", start + timedelta(seconds=10 + index), fuel=200, steam=80, predicted_fuel="", predicted_steam=78) for index in range(3)]
+            second_rows = [result_row(f"c{index}", start + timedelta(seconds=index), fuel=100, steam=50, predicted_fuel="", predicted_steam=48) for index in range(3)]
+            second_rows += [result_row(f"d{index}", start + timedelta(seconds=10 + index), fuel=300, steam=90, predicted_fuel=305, predicted_steam="") for index in range(3)]
+            first, second = root / "first", root / "second"
+            write_results(first, first_rows)
+            write_results(second, second_rows)
+
+            with self.assertRaisesRegex(ValueError, "общей предсказываемой величины"):
+                analyze_comparison(load_experiment(first), load_experiment(second))
+
+    def test_targets_in_different_common_regimes_are_not_comparable_overall(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            start = datetime(2026, 7, 30, 12, 0)
+            first_rows = [result_row(f"a{index}", start + timedelta(seconds=index), fuel=100, steam=50, predicted_fuel=105, predicted_steam="") for index in range(3)]
+            first_rows += [result_row(f"b{index}", start + timedelta(seconds=10 + index), fuel=200, steam=80, predicted_fuel="", predicted_steam=78) for index in range(3)]
+            second_rows = [result_row(f"c{index}", start + timedelta(seconds=index), fuel=100, steam=50, predicted_fuel="", predicted_steam=48) for index in range(3)]
+            second_rows += [result_row(f"d{index}", start + timedelta(seconds=10 + index), fuel=200, steam=80, predicted_fuel=205, predicted_steam="") for index in range(3)]
+            first, second = root / "first", root / "second"
+            write_results(first, first_rows)
+            write_results(second, second_rows)
+
+            with self.assertRaisesRegex(ValueError, "общей предсказываемой величины"):
+                analyze_comparison(load_experiment(first), load_experiment(second))
+
+    def test_zero_fact_mape_does_not_block_mae_comparison(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            start = datetime(2026, 7, 30, 12, 0)
+            first, second = root / "first", root / "second"
+            write_results(first, [result_row(f"a{index}", start + timedelta(seconds=index), fuel=0, steam=50, predicted_fuel=10, predicted_steam="") for index in range(3)])
+            write_results(second, [result_row(f"b{index}", start + timedelta(seconds=index), fuel=0, steam=50, predicted_fuel=20, predicted_steam="") for index in range(3)])
+
+            comparison = analyze_comparison(load_experiment(first), load_experiment(second))
+            pdf = generate_comparison_report(comparison)
+            with (pdf.parent / "csv" / "metrics_by_common_regime.csv").open(encoding="utf-8-sig", newline="") as stream:
+                regime = next(csv.DictReader(stream))
+            text = "\n".join(page.extract_text() or "" for page in PdfReader(str(pdf)).pages)
+
+            self.assertEqual(comparison.common_regimes[0].first_metrics.mae_fuel, 10)
+            self.assertIsNone(comparison.common_regimes[0].first_metrics.mape_fuel)
+            self.assertEqual(regime["mae_fuel_winner"], "first")
+            self.assertEqual(regime["mape_fuel_winner"], "Нет сопоставимых данных")
+            self.assertIn("топливо: MAE — first", text)
+
+    def test_mixed_regime_coverage_has_no_false_winner(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            start = datetime(2026, 7, 30, 12, 0)
+            first_rows = [result_row(f"a{index}", start + timedelta(seconds=index), fuel=100, steam=50, predicted_fuel=105, predicted_steam="") for index in range(3)]
+            first_rows += [result_row(f"b{index}", start + timedelta(seconds=10 + index), fuel=200, steam=80, predicted_fuel="", predicted_steam=78) for index in range(3)]
+            second_rows = [result_row(f"c{index}", start + timedelta(seconds=index), fuel=100, steam=50, predicted_fuel=103, predicted_steam="") for index in range(3)]
+            second_rows += [result_row(f"d{index}", start + timedelta(seconds=10 + index), fuel=200, steam=80, predicted_fuel=203, predicted_steam="") for index in range(3)]
+            first, second = root / "first", root / "second"
+            write_results(first, first_rows)
+            write_results(second, second_rows)
+
+            comparison = analyze_comparison(load_experiment(first), load_experiment(second))
+            pdf = generate_comparison_report(comparison)
+            with (pdf.parent / "csv" / "metrics_by_common_regime.csv").open(encoding="utf-8-sig", newline="") as stream:
+                regimes = list(csv.DictReader(stream))
+
+            self.assertEqual(regimes[0]["mae_fuel_winner"], "second")
+            self.assertEqual(regimes[1]["mae_steam_winner"], "Нет сопоставимых данных")
+            self.assertEqual(regimes[1]["mae_fuel_winner"], "Нет сопоставимых данных")
+
     def test_uses_only_physical_regime_intersection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

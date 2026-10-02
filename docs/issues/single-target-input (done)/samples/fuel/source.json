@@ -1,0 +1,160 @@
+{
+  "videos": [
+    {
+      "source_video": "S1000G1110_test.mkv",
+      "fps": 60.0,
+      "width": 1920,
+      "height": 1080,
+      "frame_count": 7264,
+      "model_path": "model/best_model.pt",
+      "window": {
+        "num_frames": 32,
+        "clip_duration_s": 1.0
+      },
+      "expected": {
+        "fuel_flow": 1110.0,
+        "diluent_flow": 1000.0,
+        "unit": "g/h",
+        "fuel_type": "gas",
+        "diluent_type": "steam",
+        "additional_air_flow": null,
+        "trained_regime": true
+      },
+      "started_at": "2026-10-01T17:52:34.167",
+      "finished_at": "2026-10-01T17:57:23.175",
+      "status": "error",
+      "stop_reason": "Ошибка чтения последнего кадра исходного видео (производная выборка).",
+      "completed_records": 3
+    },
+    {
+      "source_video": "S1000G1330_test.mkv",
+      "fps": 60.0,
+      "width": 1920,
+      "height": 1080,
+      "frame_count": 7621,
+      "model_path": "model/best_model.pt",
+      "window": {
+        "num_frames": 32,
+        "clip_duration_s": 1.0
+      },
+      "expected": {
+        "fuel_flow": 1330.0,
+        "diluent_flow": 1000.0,
+        "unit": "g/h",
+        "fuel_type": "gas",
+        "diluent_type": "steam",
+        "additional_air_flow": null,
+        "trained_regime": true
+      },
+      "started_at": "2026-10-01T17:57:23.189",
+      "finished_at": "2026-10-01T18:02:25.411",
+      "status": "completed",
+      "stop_reason": null,
+      "completed_records": 3
+    },
+    {
+      "source_video": "S1000G1550_test.mkv",
+      "fps": 60.0,
+      "width": 1920,
+      "height": 1080,
+      "frame_count": 7509,
+      "model_path": "model/best_model.pt",
+      "window": {
+        "num_frames": 32,
+        "clip_duration_s": 1.0
+      },
+      "expected": {
+        "fuel_flow": 1550.0,
+        "diluent_flow": 1000.0,
+        "unit": "g/h",
+        "fuel_type": "gas",
+        "diluent_type": "steam",
+        "additional_air_flow": null,
+        "trained_regime": true
+      },
+      "started_at": "2026-10-01T18:02:25.427",
+      "finished_at": "2026-10-01T18:07:28.933",
+      "status": "error",
+      "stop_reason": "Ошибка чтения последнего кадра исходного видео (производная выборка).",
+      "completed_records": 3
+    },
+    {
+      "source_video": "S800G1110_test.mkv",
+      "fps": 60.0,
+      "width": 1920,
+      "height": 1080,
+      "frame_count": 7240,
+      "model_path": "model/best_model.pt",
+      "window": {
+        "num_frames": 32,
+        "clip_duration_s": 1.0
+      },
+      "expected": {
+        "fuel_flow": 1110.0,
+        "diluent_flow": 800.0,
+        "unit": "g/h",
+        "fuel_type": "gas",
+        "diluent_type": "steam",
+        "additional_air_flow": null,
+        "trained_regime": true
+      },
+      "started_at": "2026-10-01T18:07:28.949",
+      "finished_at": "2026-10-01T18:12:18.472",
+      "status": "error",
+      "stop_reason": "Ошибка чтения последнего кадра исходного видео (производная выборка).",
+      "completed_records": 3
+    },
+    {
+      "source_video": "S800G1330_test.mkv",
+      "fps": 60.0,
+      "width": 1920,
+      "height": 1080,
+      "frame_count": 7290,
+      "model_path": "model/best_model.pt",
+      "window": {
+        "num_frames": 32,
+        "clip_duration_s": 1.0
+      },
+      "expected": {
+        "fuel_flow": 1330.0,
+        "diluent_flow": 800.0,
+        "unit": "g/h",
+        "fuel_type": "gas",
+        "diluent_type": "steam",
+        "additional_air_flow": null,
+        "trained_regime": true
+      },
+      "started_at": "2026-10-01T18:12:18.503",
+      "finished_at": "2026-10-01T18:17:13.161",
+      "status": "error",
+      "stop_reason": "Ошибка чтения последнего кадра исходного видео (производная выборка).",
+      "completed_records": 3
+    },
+    {
+      "source_video": "S800G1550_test.mkv",
+      "fps": 60.0,
+      "width": 1920,
+      "height": 1080,
+      "frame_count": 7247,
+      "model_path": "model/best_model.pt",
+      "window": {
+        "num_frames": 32,
+        "clip_duration_s": 1.0
+      },
+      "expected": {
+        "fuel_flow": 1550.0,
+        "diluent_flow": 800.0,
+        "unit": "g/h",
+        "fuel_type": "gas",
+        "diluent_type": "steam",
+        "additional_air_flow": null,
+        "trained_regime": true
+      },
+      "started_at": "2026-10-01T18:17:13.183",
+      "finished_at": "2026-10-01T18:21:54.784",
+      "status": "error",
+      "stop_reason": "Ошибка чтения последнего кадра исходного видео (производная выборка).",
+      "completed_records": 3
+    }
+  ]
+}

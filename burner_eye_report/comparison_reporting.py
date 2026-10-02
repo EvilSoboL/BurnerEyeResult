@@ -30,7 +30,8 @@ from .reporting import (
     BarChartFlowable,
     LineChartFlowable,
     _fmt,
-    _fmt_mape,
+    _fmt_mae,
+    _fmt_mape_metric,
     _register_fonts,
     _styles,
     _table,
@@ -88,9 +89,11 @@ def _write_csv_files(comparison: ComparisonAnalysis, csv_dir: Path) -> None:
     metric_fields = [
         "record_count",
         "mae_fuel_g_h",
+        "mae_fuel_record_count",
         "mape_fuel_percent",
         "mape_fuel_record_count",
         "mae_steam_g_h",
+        "mae_steam_record_count",
         "mape_steam_percent",
         "mape_steam_record_count",
     ]
@@ -191,6 +194,7 @@ def _write_csv_files(comparison: ComparisonAnalysis, csv_dir: Path) -> None:
                         "regime": item.display_name,
                         "observation": index,
                         "timestamp": row.timestamp.isoformat(timespec="milliseconds"),
+                        "timestamp_type": "processing_time",
                         "frame_id": row.frame_id,
                         "expected_fuel_g_h": row.expected_fuel_g_h,
                         "predicted_fuel_g_h": row.predicted_fuel_g_h,
@@ -206,6 +210,7 @@ def _write_csv_files(comparison: ComparisonAnalysis, csv_dir: Path) -> None:
             "regime",
             "observation",
             "timestamp",
+            "timestamp_type",
             "frame_id",
             "expected_fuel_g_h",
             "predicted_fuel_g_h",
@@ -320,6 +325,12 @@ def _build_pdf(comparison: ComparisonAnalysis, path: Path) -> None:
             "фактических расходов топлива и пара после приведения к г/ч.",
             styles["note"],
         ),
+        Paragraph(
+            "Сопоставимые цели: "
+            + ", ".join("топливо" if target == "fuel" else "пар" for target in sorted(comparison.comparable_targets))
+            + ".",
+            styles["note"],
+        ),
         Spacer(1, 5 * mm),
         _table(
             [
@@ -413,6 +424,27 @@ def _scope_section(comparison: ComparisonAnalysis, styles) -> list[Flowable]:
             repeat_rows=1,
         ),
     ]
+    coverage_rows = [["Общий режим", "Топливо: модель 1", "Топливо: модель 2", "Пар: модель 1", "Пар: модель 2", "Общие цели"]]
+    for index, item in enumerate(comparison.common_regimes, start=1):
+        first, second = item.first_metrics, item.second_metrics
+        shared = []
+        if first.mae_fuel_count and second.mae_fuel_count:
+            shared.append("топливо")
+        if first.mae_steam_count and second.mae_steam_count:
+            shared.append("пар")
+        coverage_rows.append([
+            f"R{index:02d}",
+            str(first.mae_fuel_count),
+            str(second.mae_fuel_count),
+            str(first.mae_steam_count),
+            str(second.mae_steam_count),
+            ", ".join(shared) if shared else "Нет сопоставимых данных",
+        ])
+    result.extend([
+        Spacer(1, 4 * mm),
+        Paragraph("Покрытие прогнозами в общих режимах", styles["h2"]),
+        _table(coverage_rows, [31 * mm, 29 * mm, 29 * mm, 26 * mm, 26 * mm, 39 * mm], styles, repeat_rows=1, font_size=7),
+    ])
     excluded = [
         (comparison.first_name, regime)
         for regime in comparison.first_only_regimes
@@ -476,8 +508,8 @@ def _overall_section(comparison: ComparisonAnalysis, styles) -> list[Flowable]:
         BarChartFlowable(
             [comparison.first_name, comparison.second_name],
             {
-                "Топливо": [first.mae_fuel, second.mae_fuel],
-                "Пар": [first.mae_steam, second.mae_steam],
+                "Топливо": _paired_values(first.mae_fuel, second.mae_fuel),
+                "Пар": _paired_values(first.mae_steam, second.mae_steam),
             },
             "MAE, г/ч",
         ),
@@ -485,8 +517,8 @@ def _overall_section(comparison: ComparisonAnalysis, styles) -> list[Flowable]:
         BarChartFlowable(
             [comparison.first_name, comparison.second_name],
             {
-                "Топливо": [first.mape_fuel, second.mape_fuel],
-                "Пар": [first.mape_steam, second.mape_steam],
+                "Топливо": _paired_values(first.mape_fuel, second.mape_fuel),
+                "Пар": _paired_values(first.mape_steam, second.mape_steam),
             },
             "MAPE, %",
         ),
@@ -512,14 +544,8 @@ def _regime_overview_section(
                 BarChartFlowable(
                     groups,
                     {
-                        comparison.first_name: [
-                            item.first_metrics.mae_fuel
-                            for item in comparison.common_regimes
-                        ],
-                        comparison.second_name: [
-                            item.second_metrics.mae_fuel
-                            for item in comparison.common_regimes
-                        ],
+                        comparison.first_name: _paired_regime_values(comparison, "mae_fuel", "mae_fuel_count"),
+                        comparison.second_name: _paired_regime_values(comparison, "mae_fuel", "mae_fuel_count", second=True),
                     },
                     "MAE топлива, г/ч",
                 ),
@@ -531,14 +557,8 @@ def _regime_overview_section(
                 BarChartFlowable(
                     groups,
                     {
-                        comparison.first_name: [
-                            item.first_metrics.mae_steam
-                            for item in comparison.common_regimes
-                        ],
-                        comparison.second_name: [
-                            item.second_metrics.mae_steam
-                            for item in comparison.common_regimes
-                        ],
+                        comparison.first_name: _paired_regime_values(comparison, "mae_steam", "mae_steam_count"),
+                        comparison.second_name: _paired_regime_values(comparison, "mae_steam", "mae_steam_count", second=True),
                     },
                     "MAE пара, г/ч",
                 ),
@@ -550,14 +570,8 @@ def _regime_overview_section(
                 BarChartFlowable(
                     groups,
                     {
-                        comparison.first_name: [
-                            item.first_metrics.mape_fuel
-                            for item in comparison.common_regimes
-                        ],
-                        comparison.second_name: [
-                            item.second_metrics.mape_fuel
-                            for item in comparison.common_regimes
-                        ],
+                        comparison.first_name: _paired_regime_values(comparison, "mape_fuel", "mape_fuel_count"),
+                        comparison.second_name: _paired_regime_values(comparison, "mape_fuel", "mape_fuel_count", second=True),
                     },
                     "MAPE топлива, %",
                 ),
@@ -569,14 +583,8 @@ def _regime_overview_section(
                 BarChartFlowable(
                     groups,
                     {
-                        comparison.first_name: [
-                            item.first_metrics.mape_steam
-                            for item in comparison.common_regimes
-                        ],
-                        comparison.second_name: [
-                            item.second_metrics.mape_steam
-                            for item in comparison.common_regimes
-                        ],
+                        comparison.first_name: _paired_regime_values(comparison, "mape_steam", "mape_steam_count"),
+                        comparison.second_name: _paired_regime_values(comparison, "mape_steam", "mape_steam_count", second=True),
                     },
                     "MAPE пара, %",
                 ),
@@ -605,6 +613,8 @@ def _regime_section(
     x_labels = [str(index) for index in range(1, observation_count + 1)]
     expected_fuel = [item.key[0]] * observation_count
     expected_steam = [item.key[1]] * observation_count
+    fuel_comparable = bool(item.first_metrics.mae_fuel_count and item.second_metrics.mae_fuel_count)
+    steam_comparable = bool(item.first_metrics.mae_steam_count and item.second_metrics.mae_steam_count)
     result: list[Flowable] = [
         PageBreak(),
         Paragraph(item.display_name, styles["h1"]),
@@ -637,7 +647,7 @@ def _regime_section(
         KeepTogether(
             [
                 Paragraph(
-                    "Фактический и предсказанный расход топлива",
+                    "Фактический и предсказанный расход топлива" if fuel_comparable else "Топливо: нет сопоставимых прогнозов",
                     styles["h2"],
                 ),
                 LineChartFlowable(
@@ -649,12 +659,12 @@ def _regime_section(
                             first_rows,
                             "predicted_fuel_g_h",
                             observation_count,
-                        ),
+                        ) if fuel_comparable else [None] * observation_count,
                         comparison.second_name: _padded_values(
                             second_rows,
                             "predicted_fuel_g_h",
                             observation_count,
-                        ),
+                        ) if fuel_comparable else [None] * observation_count,
                     },
                     "Топливо, г/ч",
                     font_name=font_name,
@@ -664,7 +674,7 @@ def _regime_section(
         KeepTogether(
             [
                 Paragraph(
-                    "Фактический и предсказанный расход пара",
+                    "Фактический и предсказанный расход пара" if steam_comparable else "Пар: нет сопоставимых прогнозов",
                     styles["h2"],
                 ),
                 LineChartFlowable(
@@ -676,12 +686,12 @@ def _regime_section(
                             first_rows,
                             "predicted_steam_g_h",
                             observation_count,
-                        ),
+                        ) if steam_comparable else [None] * observation_count,
                         comparison.second_name: _padded_values(
                             second_rows,
                             "predicted_steam_g_h",
                             observation_count,
-                        ),
+                        ) if steam_comparable else [None] * observation_count,
                     },
                     "Пар, г/ч",
                     font_name=font_name,
@@ -706,20 +716,20 @@ def _regime_section(
                         list(STAGES),
                         {
                             f"{comparison.first_name}: топливо": [
-                                metrics.mae_fuel
-                                for metrics in item.first_stage_metrics
+                                first_value if first_count and second_count else None
+                                for first_value, first_count, second_count in _stage_pair(item.first_stage_metrics, item.second_stage_metrics, "mae_fuel", "mae_fuel_count")
                             ],
                             f"{comparison.second_name}: топливо": [
-                                metrics.mae_fuel
-                                for metrics in item.second_stage_metrics
+                                second_value if first_count and second_count else None
+                                for second_value, first_count, second_count in _stage_pair(item.first_stage_metrics, item.second_stage_metrics, "mae_fuel", "mae_fuel_count", second=True)
                             ],
                             f"{comparison.first_name}: пар": [
-                                metrics.mae_steam
-                                for metrics in item.first_stage_metrics
+                                first_value if first_count and second_count else None
+                                for first_value, first_count, second_count in _stage_pair(item.first_stage_metrics, item.second_stage_metrics, "mae_steam", "mae_steam_count")
                             ],
                             f"{comparison.second_name}: пар": [
-                                metrics.mae_steam
-                                for metrics in item.second_stage_metrics
+                                second_value if first_count and second_count else None
+                                for second_value, first_count, second_count in _stage_pair(item.first_stage_metrics, item.second_stage_metrics, "mae_steam", "mae_steam_count", second=True)
                             ],
                         },
                         "MAE, г/ч",
@@ -738,10 +748,10 @@ def _metrics_row(label: str, metrics: MetricSet) -> list[object]:
     return [
         label,
         metrics.record_count,
-        _fmt(metrics.mae_fuel),
-        _fmt_mape(metrics.mape_fuel),
-        _fmt(metrics.mae_steam),
-        _fmt_mape(metrics.mape_steam),
+        _fmt_mae(metrics.mae_fuel, metrics.mae_fuel_count),
+        _fmt_mape_metric(metrics.mape_fuel, metrics.mae_fuel_count, metrics.mape_fuel_count),
+        _fmt_mae(metrics.mae_steam, metrics.mae_steam_count),
+        _fmt_mape_metric(metrics.mape_steam, metrics.mae_steam_count, metrics.mape_steam_count),
     ]
 
 
@@ -750,7 +760,11 @@ def _padded_values(
     attribute: str,
     size: int,
 ) -> list[float | None]:
-    values = [float(getattr(row, attribute)) for row in rows]
+    values = [
+        float(value) if value is not None else None
+        for row in rows
+        for value in (getattr(row, attribute),)
+    ]
     return values + [None] * (size - len(values))
 
 
@@ -758,22 +772,54 @@ def _regime_conclusion(
     comparison: ComparisonAnalysis,
     item: CommonRegimeComparison,
 ) -> str:
-    fuel_winner = metric_winner(
-        item.first_metrics.mape_fuel,
-        item.second_metrics.mape_fuel,
-        comparison.first_name,
-        comparison.second_name,
-    )
-    steam_winner = metric_winner(
-        item.first_metrics.mape_steam,
-        item.second_metrics.mape_steam,
-        comparison.first_name,
-        comparison.second_name,
-    )
-    return (
-        f"Меньший MAPE топлива: {escape(fuel_winner)}. "
-        f"Меньший MAPE пара: {escape(steam_winner)}."
-    )
+    results = []
+    for label, mae, mape in (
+        ("топливо", "mae_fuel", "mape_fuel"),
+        ("пар", "mae_steam", "mape_steam"),
+    ):
+        first_mape = getattr(item.first_metrics, mape)
+        second_mape = getattr(item.second_metrics, mape)
+        if first_mape is not None and second_mape is not None:
+            winner = metric_winner(first_mape, second_mape, comparison.first_name, comparison.second_name)
+            metric_name = "MAPE"
+        else:
+            first_mae = getattr(item.first_metrics, mae)
+            second_mae = getattr(item.second_metrics, mae)
+            winner = metric_winner(first_mae, second_mae, comparison.first_name, comparison.second_name)
+            metric_name = "MAE"
+        results.append(f"{label}: {metric_name} — {escape(winner)}")
+    return ". ".join(results) + "."
+
+
+def _paired_values(first: float | None, second: float | None) -> list[float | None]:
+    return [first, second] if first is not None and second is not None else [None, None]
+
+
+def _paired_regime_values(
+    comparison: ComparisonAnalysis,
+    value_name: str,
+    count_name: str,
+    *,
+    second: bool = False,
+) -> list[float | None]:
+    values: list[float | None] = []
+    for regime in comparison.common_regimes:
+        first_metrics, second_metrics = regime.first_metrics, regime.second_metrics
+        if not getattr(first_metrics, count_name) or not getattr(second_metrics, count_name):
+            values.append(None)
+            continue
+        metrics = second_metrics if second else first_metrics
+        values.append(getattr(metrics, value_name))
+    return values
+
+
+def _stage_pair(first_stages, second_stages, value_name: str, count_name: str, *, second: bool = False):
+    for first_metrics, second_metrics in zip(first_stages, second_stages):
+        yield (
+            getattr(second_metrics if second else first_metrics, value_name),
+            getattr(first_metrics, count_name),
+            getattr(second_metrics, count_name),
+        )
 
 
 def _progress(

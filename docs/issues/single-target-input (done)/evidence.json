@@ -1,0 +1,324 @@
+{
+  "date": "2026-10-02",
+  "commit": "beb33ccb6f6da833e9f3effed450ad8153dd0f6d",
+  "full": [
+    {
+      "directory": "video_prediction_20261001_172357_314810",
+      "record_count": 734,
+      "fuel": {
+        "prediction_count": 0,
+        "mae_g_h": null,
+        "mape_percent": null,
+        "mape_count": 0
+      },
+      "steam": {
+        "prediction_count": 734,
+        "mae_g_h": 13.09234502452316,
+        "mape_percent": 1.3396054879087194,
+        "mape_count": 734
+      },
+      "regimes": [
+        {
+          "fuel": 1110.0,
+          "steam": 800.0,
+          "record_count": 120
+        },
+        {
+          "fuel": 1110.0,
+          "steam": 1000.0,
+          "record_count": 121
+        },
+        {
+          "fuel": 1330.0,
+          "steam": 800.0,
+          "record_count": 121
+        },
+        {
+          "fuel": 1330.0,
+          "steam": 1000.0,
+          "record_count": 127
+        },
+        {
+          "fuel": 1550.0,
+          "steam": 800.0,
+          "record_count": 120
+        },
+        {
+          "fuel": 1550.0,
+          "steam": 1000.0,
+          "record_count": 125
+        }
+      ],
+      "sha256": {
+        "results.csv": "63d6b1a443e27231a2aeeb7039055ce57b815a4eb4bf3358b141b71d989b5daa",
+        "video_index.csv": "68ebfe1b868b571ce0721f43d6a5b203db61ed016898aceb2ab67085476c8ce2",
+        "source.json": "1eccea5f68b57f7e6831360369623e859ff6a1295176b405bdbd7f62e19c764a"
+      },
+      "video_index": {
+        "record_count": 734,
+        "unique_ids": 734,
+        "same_ids_as_results": true,
+        "records_by_video": {
+          "S1000G1110_test.mkv": 121,
+          "S1000G1330_test.mkv": 127,
+          "S1000G1550_test.mkv": 125,
+          "S800G1110_test.mkv": 120,
+          "S800G1330_test.mkv": 121,
+          "S800G1550_test.mkv": 120
+        }
+      },
+      "source": {
+        "video_count": 6,
+        "statuses": {
+          "error": 5,
+          "completed": 1
+        },
+        "completed_records": 734
+      },
+      "frame_inventory": {
+        "primary_jpeg_count": 734,
+        "window_count": 734,
+        "windows_by_jpeg_count": {
+          "32": 734
+        },
+        "readability_verified": false
+      },
+      "target": "steam"
+    },
+    {
+      "directory": "video_prediction_20261001_175234_167417",
+      "record_count": 734,
+      "fuel": {
+        "prediction_count": 734,
+        "mae_g_h": 6.919482930517712,
+        "mape_percent": 0.5240017495469943,
+        "mape_count": 734
+      },
+      "steam": {
+        "prediction_count": 0,
+        "mae_g_h": null,
+        "mape_percent": null,
+        "mape_count": 0
+      },
+      "regimes": [
+        {
+          "fuel": 1110.0,
+          "steam": 800.0,
+          "record_count": 120
+        },
+        {
+          "fuel": 1110.0,
+          "steam": 1000.0,
+          "record_count": 121
+        },
+        {
+          "fuel": 1330.0,
+          "steam": 800.0,
+          "record_count": 121
+        },
+        {
+          "fuel": 1330.0,
+          "steam": 1000.0,
+          "record_count": 127
+        },
+        {
+          "fuel": 1550.0,
+          "steam": 800.0,
+          "record_count": 120
+        },
+        {
+          "fuel": 1550.0,
+          "steam": 1000.0,
+          "record_count": 125
+        }
+      ],
+      "sha256": {
+        "results.csv": "879908c147c7f94f3b918b9ffe8e0ba87b8e8f9ade6ec6b830ef7f996ca68b22",
+        "video_index.csv": "68ebfe1b868b571ce0721f43d6a5b203db61ed016898aceb2ab67085476c8ce2",
+        "source.json": "eaec152774ddd55dab6ffff7ce3f079d55c42d2a71a9fa21d89b760208cf0bca"
+      },
+      "video_index": {
+        "record_count": 734,
+        "unique_ids": 734,
+        "same_ids_as_results": true,
+        "records_by_video": {
+          "S1000G1110_test.mkv": 121,
+          "S1000G1330_test.mkv": 127,
+          "S1000G1550_test.mkv": 125,
+          "S800G1110_test.mkv": 120,
+          "S800G1330_test.mkv": 121,
+          "S800G1550_test.mkv": 120
+        }
+      },
+      "source": {
+        "video_count": 6,
+        "statuses": {
+          "error": 5,
+          "completed": 1
+        },
+        "completed_records": 734
+      },
+      "frame_inventory": {
+        "primary_jpeg_count": 734,
+        "window_count": 734,
+        "windows_by_jpeg_count": {
+          "32": 734
+        },
+        "readability_verified": false
+      },
+      "target": "fuel"
+    }
+  ],
+  "samples": [
+    {
+      "directory": "steam",
+      "record_count": 18,
+      "fuel": {
+        "prediction_count": 0,
+        "mae_g_h": null,
+        "mape_percent": null,
+        "mape_count": 0
+      },
+      "steam": {
+        "prediction_count": 18,
+        "mae_g_h": 65.48885483333333,
+        "mape_percent": 6.577511022222222,
+        "mape_count": 18
+      },
+      "regimes": [
+        {
+          "fuel": 1110.0,
+          "steam": 800.0,
+          "record_count": 3
+        },
+        {
+          "fuel": 1110.0,
+          "steam": 1000.0,
+          "record_count": 3
+        },
+        {
+          "fuel": 1330.0,
+          "steam": 800.0,
+          "record_count": 3
+        },
+        {
+          "fuel": 1330.0,
+          "steam": 1000.0,
+          "record_count": 3
+        },
+        {
+          "fuel": 1550.0,
+          "steam": 800.0,
+          "record_count": 3
+        },
+        {
+          "fuel": 1550.0,
+          "steam": 1000.0,
+          "record_count": 3
+        }
+      ],
+      "sha256": {
+        "results.csv": "9fd9c09e896b7fc8e642e9d48ca17def24f0200f3ee081908deb765dcf817716",
+        "video_index.csv": "915c14b3f3116882779ebc8451e490f851eafbd0757157e2a82e1473cbffc42f",
+        "source.json": "9eb08e117bab95bbe19b7d6cb31ad66c75c6daacb8271b1779bf848f24d2a497"
+      },
+      "video_index": {
+        "record_count": 18,
+        "unique_ids": 18,
+        "same_ids_as_results": true,
+        "records_by_video": {
+          "S1000G1110_test.mkv": 3,
+          "S1000G1330_test.mkv": 3,
+          "S1000G1550_test.mkv": 3,
+          "S800G1110_test.mkv": 3,
+          "S800G1330_test.mkv": 3,
+          "S800G1550_test.mkv": 3
+        }
+      },
+      "source": {
+        "video_count": 6,
+        "statuses": {
+          "error": 5,
+          "completed": 1
+        },
+        "completed_records": 18
+      },
+      "target": "steam"
+    },
+    {
+      "directory": "fuel",
+      "record_count": 18,
+      "fuel": {
+        "prediction_count": 18,
+        "mae_g_h": 31.488379611111114,
+        "mape_percent": 2.372866552294473,
+        "mape_count": 18
+      },
+      "steam": {
+        "prediction_count": 0,
+        "mae_g_h": null,
+        "mape_percent": null,
+        "mape_count": 0
+      },
+      "regimes": [
+        {
+          "fuel": 1110.0,
+          "steam": 800.0,
+          "record_count": 3
+        },
+        {
+          "fuel": 1110.0,
+          "steam": 1000.0,
+          "record_count": 3
+        },
+        {
+          "fuel": 1330.0,
+          "steam": 800.0,
+          "record_count": 3
+        },
+        {
+          "fuel": 1330.0,
+          "steam": 1000.0,
+          "record_count": 3
+        },
+        {
+          "fuel": 1550.0,
+          "steam": 800.0,
+          "record_count": 3
+        },
+        {
+          "fuel": 1550.0,
+          "steam": 1000.0,
+          "record_count": 3
+        }
+      ],
+      "sha256": {
+        "results.csv": "ce2ee101dbbee2dee446bd293f8ccd8ea3c7a864f41d3af149eac2be4852eced",
+        "video_index.csv": "915c14b3f3116882779ebc8451e490f851eafbd0757157e2a82e1473cbffc42f",
+        "source.json": "62122631fc3d3320819a7ef94455ce8922cfef9b14e5692a48afe1416dd9fab8"
+      },
+      "video_index": {
+        "record_count": 18,
+        "unique_ids": 18,
+        "same_ids_as_results": true,
+        "records_by_video": {
+          "S1000G1110_test.mkv": 3,
+          "S1000G1330_test.mkv": 3,
+          "S1000G1550_test.mkv": 3,
+          "S800G1110_test.mkv": 3,
+          "S800G1330_test.mkv": 3,
+          "S800G1550_test.mkv": 3
+        }
+      },
+      "source": {
+        "video_count": 6,
+        "statuses": {
+          "error": 5,
+          "completed": 1
+        },
+        "completed_records": 18
+      },
+      "target": "fuel"
+    }
+  ]
+}

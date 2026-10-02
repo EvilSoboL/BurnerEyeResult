@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta
@@ -66,6 +67,108 @@ def csv_row(
 
 
 class LoaderTests(unittest.TestCase):
+    def test_video_metadata_bom_linking_and_nonblocking_mismatches(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = datetime(2026, 7, 1, 12, 0, 0)
+            write_experiment(root, [csv_row(1, timestamp=now), csv_row(2, timestamp=now + timedelta(seconds=1))])
+            (root / "video_index.csv").write_text(
+                "\ufeffframe_id,source_video,start_s,end_s,source_frame_indices\n"
+                "1,clip.mkv,0,1,0;2;4\n1,dup.mkv,0,1,0;1\n2,clip.mkv,1,2,60;62;64\n9,extra.mkv,0,1,0;1\n",
+                encoding="utf-8",
+            )
+            source = {
+                "videos": [{
+                    "source_video": "clip.mkv", "status": "error", "stop_reason": "read failed",
+                    "completed_records": 1, "expected": {"fuel_flow": 999, "diluent_flow": 800, "unit": "g/h", "trained_regime": True},
+                    "window": {"num_frames": 3, "clip_duration_s": 1.0}, "model_path": "missing/model.pt",
+                }]
+            }
+            (root / "source.json").write_text("\ufeff" + json.dumps(source), encoding="utf-8")
+
+            experiment = load_experiment(root)
+
+            self.assertEqual(len(experiment.rows), 2)
+            self.assertIsNone(experiment.rows[0].video_metadata)
+            self.assertEqual(experiment.rows[1].video_metadata.source_frame_indices, [60, 62, 64])
+            self.assertEqual(experiment.video_sources[0].model_path, "missing/model.pt")
+            self.assertFalse(experiment.blocking_issues)
+            codes = {issue.code for issue in experiment.issues}
+            self.assertTrue({"video_index_duplicate_id", "video_index_missing_ids", "video_index_extra_ids", "source_completed_records_mismatch", "source_video_partial", "source_expected_mismatch"}.issubset(codes))
+
+    def test_damaged_optional_metadata_never_blocks_results(self) -> None:
+        for filename, contents, expected_code in (
+            ("source.json", "{bad json", "source_json_unreadable"),
+            ("video_index.csv", "wrong,columns\n1,x\n", "video_index_schema"),
+        ):
+            with self.subTest(filename=filename), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                write_experiment(root, [csv_row(1, timestamp=datetime(2026, 7, 1, 12, 0))])
+                (root / filename).write_text(contents, encoding="utf-8")
+
+                experiment = load_experiment(root)
+
+                self.assertEqual(len(experiment.rows), 1)
+                self.assertFalse(experiment.blocking_issues)
+                self.assertIn(expected_code, {issue.code for issue in experiment.issues})
+
+    def test_invalid_video_index_records_are_skipped_individually(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = datetime(2026, 7, 1, 12, 0, 0)
+            write_experiment(root, [csv_row(1, timestamp=now), csv_row(2, timestamp=now + timedelta(seconds=1))])
+            (root / "video_index.csv").write_text(
+                "frame_id,source_video,start_s,end_s,source_frame_indices\n"
+                "1,clip.mkv,2,1,0;1\n2,clip.mkv,1,2,4;2\n",
+                encoding="utf-8",
+            )
+
+            experiment = load_experiment(root)
+
+            self.assertEqual(len(experiment.rows), 2)
+            self.assertTrue(all(row.video_metadata is None for row in experiment.rows))
+            invalid = [issue for issue in experiment.issues if issue.code == "video_index_record_invalid"]
+            self.assertEqual(len(invalid), 2)
+            self.assertFalse(experiment.blocking_issues)
+
+    def test_optional_prediction_channels_and_unit_normalization(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = datetime(2026, 7, 1, 12, 0, 0)
+            rows = [
+                csv_row(1, timestamp=now, unit="kg/h", predicted_fuel="", predicted_steam=0),
+                csv_row(2, timestamp=now + timedelta(seconds=1), unit="g/s", predicted_fuel=2, predicted_steam=" "),
+            ]
+            write_experiment(root, rows)
+            experiment = load_experiment(root)
+
+            self.assertEqual(len(experiment.rows), 2)
+            self.assertEqual(experiment.predicted_fuel_count, 1)
+            self.assertEqual(experiment.predicted_steam_count, 1)
+            self.assertEqual(experiment.available_targets, {"fuel", "steam"})
+            self.assertIsNone(experiment.rows[0].predicted_fuel_g_h)
+            self.assertEqual(experiment.rows[0].predicted_steam_g_h, 0)
+            self.assertEqual(experiment.rows[1].predicted_fuel_g_h, 7200)
+            self.assertIsNone(experiment.rows[1].predicted_steam_g_h)
+
+    def test_both_empty_and_invalid_optional_prediction_are_excluded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = datetime(2026, 7, 1, 12, 0, 0)
+            rows = [
+                csv_row(1, timestamp=now, predicted_fuel="", predicted_steam="  "),
+                csv_row(2, timestamp=now + timedelta(seconds=1), predicted_fuel="NaN", predicted_steam=2),
+                csv_row(3, timestamp=now + timedelta(seconds=2), predicted_fuel=3, predicted_steam="Inf"),
+                csv_row(4, timestamp=now + timedelta(seconds=3), predicted_fuel=0, predicted_steam=""),
+            ]
+            write_experiment(root, rows)
+            experiment = load_experiment(root)
+
+            self.assertEqual([row.frame_id for row in experiment.rows], ["4"])
+            self.assertEqual(experiment.excluded_rows, 3)
+            self.assertEqual(experiment.predicted_fuel_count, 1)
+            self.assertEqual(experiment.predicted_steam_count, 0)
+
     def test_equivalent_units_form_one_conflicting_regime(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -124,8 +227,94 @@ class LoaderTests(unittest.TestCase):
                 any(issue.code == "duplicate_frame_id" for issue in experiment.issues)
             )
 
+    def test_missing_and_corrupt_jpegs_keep_rows_but_exclude_frames(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = datetime(2026, 7, 1, 12, 0, 0)
+            rows = [
+                csv_row(index, timestamp=now + timedelta(seconds=index))
+                for index in range(1, 7)
+            ]
+            write_experiment(root, rows)
+            frames = root / "frames"
+            (frames / "1.jpg").unlink()
+            (frames / "2.jpg").write_bytes(b"not a jpeg")
+
+            experiment = load_experiment(root)
+            analysis = analyze_experiment(experiment)
+
+            self.assertEqual(len(experiment.rows), 6)
+            self.assertEqual(experiment.excluded_rows, 0)
+            self.assertEqual(experiment.primary_frame_count, 4)
+            self.assertEqual(len(analysis.selected_frames), 4)
+            codes = {issue.code for issue in experiment.issues}
+            self.assertIn("corrupt_frame", codes)
+            self.assertIn("missing_primary_frames", codes)
+            self.assertTrue(all(selected.row.image_path is not None for selected in analysis.selected_frames))
+
 
 class MetricsTests(unittest.TestCase):
+    def test_mixed_channel_metrics_and_frame_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = datetime(2026, 7, 1, 12, 0)
+            rows = [
+                csv_row(1, timestamp=now, fuel=100, steam=50, predicted_fuel=110, predicted_steam=""),
+                csv_row(2, timestamp=now + timedelta(seconds=1), fuel=100, steam=50, predicted_fuel="", predicted_steam=45),
+            ]
+            write_experiment(root, rows)
+            analysis = analyze_experiment(load_experiment(root))
+
+            metrics = analysis.overall_metrics
+            self.assertEqual(metrics.record_count, 2)
+            self.assertEqual((metrics.mae_fuel, metrics.mae_fuel_count), (10, 1))
+            self.assertEqual((metrics.mape_fuel, metrics.mape_fuel_count), (10, 1))
+            self.assertEqual((metrics.mae_steam, metrics.mae_steam_count), (5, 1))
+            self.assertEqual((metrics.mape_steam, metrics.mape_steam_count), (10, 1))
+            self.assertIsNone(analysis.row_metrics["1"]["signed_error_steam"])
+            self.assertIsNone(analysis.row_metrics["2"]["absolute_error_fuel"])
+            self.assertTrue(any("Состав каналов" in note for note in analysis.processing_notes))
+            self.assertTrue(all(frame.abs_error_fuel is None or frame.abs_error_steam is None for frame in analysis.selected_frames))
+
+    def test_fully_missing_channel_and_direction_conclusion(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = datetime(2026, 7, 1, 12, 0)
+            rows = [
+                csv_row(index, timestamp=now + timedelta(seconds=index), predicted_fuel=1000 + index, predicted_steam="")
+                for index in range(1, 5)
+            ]
+            write_experiment(root, rows)
+            analysis = analyze_experiment(load_experiment(root))
+
+            self.assertIsNone(analysis.overall_metrics.mae_steam)
+            self.assertIsNone(analysis.overall_metrics.mape_steam)
+            self.assertEqual(analysis.overall_metrics.mae_steam_count, 0)
+            self.assertEqual(analysis.overall_metrics.mape_steam_count, 0)
+            self.assertIn("недоступно", analysis.error_conclusions["overall_steam"])
+            self.assertTrue(all(frame.abs_error_steam is None for frame in analysis.selected_frames))
+
+    def test_stage_conclusion_requires_a_common_channel(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = datetime(2026, 7, 1, 12, 0)
+            rows = []
+            for index in range(6):
+                fuel_prediction = 1010 if index < 2 else (1010 if index < 4 else "")
+                steam_prediction = 790 if index >= 2 else ""
+                rows.append(
+                    csv_row(
+                        index + 1,
+                        timestamp=now + timedelta(seconds=index),
+                        predicted_fuel=fuel_prediction,
+                        predicted_steam=steam_prediction,
+                    )
+                )
+            write_experiment(root, rows)
+            analysis = analyze_experiment(load_experiment(root))
+
+            self.assertIn("нет каналов с сопоставимыми прогнозами", analysis.overall_conclusion)
+
     def test_zero_expected_is_kept_in_mae_and_excluded_from_mape(self) -> None:
         row = PredictionRow(
             timestamp=datetime(2026, 7, 1),

@@ -33,12 +33,12 @@ class PredictionRow:
     source_unit: str
     expected_fuel: float
     expected_steam: float
-    predicted_fuel: float
-    predicted_steam: float
+    predicted_fuel: float | None
+    predicted_steam: float | None
     expected_fuel_g_h: float
     expected_steam_g_h: float
-    predicted_fuel_g_h: float
-    predicted_steam_g_h: float
+    predicted_fuel_g_h: float | None
+    predicted_steam_g_h: float | None
     trained_regime: bool
     predicted_regime: str
     regime_confidence: float | None
@@ -46,6 +46,36 @@ class PredictionRow:
     image_path: Path | None = None
     temporal_frame_count: int = 0
     regime_id: str = ""
+    video_metadata: VideoIndexEntry | None = None
+
+
+@dataclass(slots=True)
+class VideoIndexEntry:
+    source_video: str
+    start_s: float
+    end_s: float
+    source_frame_indices: list[int]
+
+
+@dataclass(slots=True)
+class VideoSource:
+    source_video: str
+    status: str
+    stop_reason: str | None = None
+    completed_records: int | None = None
+    fps: float | None = None
+    width: int | None = None
+    height: int | None = None
+    frame_count: int | None = None
+    model_path: str | None = None
+    window_num_frames: int | None = None
+    clip_duration_s: float | None = None
+    expected_fuel: float | None = None
+    expected_steam: float | None = None
+    expected_unit: str | None = None
+    fuel_type: str | None = None
+    diluent_type: str | None = None
+    trained_regime: bool | None = None
 
 
 @dataclass(slots=True)
@@ -119,6 +149,24 @@ class ExperimentData:
     excluded_rows: int = 0
     orphan_frames: list[Path] = field(default_factory=list)
     temporal_window_count: int = 0
+    video_sources: list[VideoSource] = field(default_factory=list)
+
+    @property
+    def predicted_fuel_count(self) -> int:
+        return sum(row.predicted_fuel_g_h is not None for row in self.rows)
+
+    @property
+    def predicted_steam_count(self) -> int:
+        return sum(row.predicted_steam_g_h is not None for row in self.rows)
+
+    @property
+    def available_targets(self) -> set[str]:
+        targets: set[str] = set()
+        if self.predicted_fuel_count:
+            targets.add("fuel")
+        if self.predicted_steam_count:
+            targets.add("steam")
+        return targets
 
     @property
     def blocking_issues(self) -> list[ValidationIssue]:
@@ -168,14 +216,18 @@ class MetricSet:
     mae_steam: float | None
     mape_steam: float | None
     mape_steam_count: int
+    mae_fuel_count: int = 0
+    mae_steam_count: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "record_count": self.record_count,
             "mae_fuel_g_h": self.mae_fuel,
+            "mae_fuel_record_count": self.mae_fuel_count,
             "mape_fuel_percent": self.mape_fuel,
             "mape_fuel_record_count": self.mape_fuel_count,
             "mae_steam_g_h": self.mae_steam,
+            "mae_steam_record_count": self.mae_steam_count,
             "mape_steam_percent": self.mape_steam,
             "mape_steam_record_count": self.mape_steam_count,
         }
@@ -198,9 +250,9 @@ class SelectedFrame:
     rank: int
     score: float
     score_method: str
-    abs_error_fuel: float
+    abs_error_fuel: float | None
     ape_fuel: float | None
-    abs_error_steam: float
+    abs_error_steam: float | None
     ape_steam: float | None
 
 

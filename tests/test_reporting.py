@@ -28,6 +28,86 @@ FIELDS = [
 
 
 class ReportIntegrationTests(unittest.TestCase):
+    def test_single_channel_reports_export_empty_values_and_provenance(self) -> None:
+        expected_files = {
+            "overall_metrics.csv",
+            "trained_untrained_metrics.csv",
+            "metrics_by_regime.csv",
+            "metrics_by_regime_stage.csv",
+            "overall_stage_metrics.csv",
+            "prediction_timeline.csv",
+            "error_distribution.csv",
+            "selected_frames.csv",
+            "regime_classification.csv",
+        }
+        for channel in ("fuel", "steam"):
+            with self.subTest(channel=channel), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                frames = root / "frames"
+                frames.mkdir()
+                rows: list[dict[str, object]] = []
+                start = datetime(2026, 7, 20, 10, 0)
+                for index in range(1, 5):
+                    rows.append({
+                        "timestamp": (start + timedelta(seconds=index)).isoformat(timespec="milliseconds"),
+                        "frame_id": index,
+                        "unit": "g/h",
+                        "expected_fuel_flow": 100,
+                        "expected_diluent_flow": 0 if channel == "fuel" else 50,
+                        "trained_regime": 1,
+                        "predicted_fuel_flow": 100 + (index - 1) * 10 if channel == "fuel" else "",
+                        "predicted_diluent_flow": 50 if channel == "steam" else "",
+                        "regime": "model",
+                        "regime_confidence": "",
+                    })
+                    Image.new("RGB", (320, 180), color=(20 * index, 80, 120)).save(frames / f"{index}.jpg")
+                with (root / "results.csv").open("w", encoding="utf-8", newline="") as stream:
+                    writer = csv.DictWriter(stream, fieldnames=FIELDS)
+                    writer.writeheader()
+                    writer.writerows(rows)
+                (root / "video_index.csv").write_text(
+                    "frame_id,source_video,start_s,end_s,source_frame_indices\n" +
+                    "".join(f"{index},clip.mkv,{index - 1},{index},0;2;4\n" for index in range(1, 5)),
+                    encoding="utf-8",
+                )
+                (root / "source.json").write_text(
+                    '{"videos":[{"source_video":"clip.mkv","status":"error",'
+                    '"stop_reason":"fixture partial","completed_records":4}]}' ,
+                    encoding="utf-8",
+                )
+
+                pdf_path = generate_report(load_experiment(root))
+
+                csv_dir = pdf_path.parent / "csv"
+                self.assertEqual({path.name for path in csv_dir.iterdir()}, expected_files)
+                self.assertTrue((pdf_path.parent / "processing.log").is_file())
+                text = "\n".join(page.extract_text() or "" for page in PdfReader(str(pdf_path)).pages)
+                self.assertIn("Прогнозы по каналам", text)
+                self.assertIn("fixture partial", text)
+                self.assertIn("clip.mkv", text)
+                self.assertIn("Время обработки", text)
+                self.assertIn("Нет прогнозов", text)
+                with (csv_dir / "overall_metrics.csv").open(encoding="utf-8-sig", newline="") as stream:
+                    metric = next(csv.DictReader(stream))
+                predicted_key = "mae_fuel_record_count" if channel == "fuel" else "mae_steam_record_count"
+                absent_key = "mae_steam_record_count" if channel == "fuel" else "mae_fuel_record_count"
+                self.assertEqual(metric[predicted_key], "4")
+                self.assertEqual(metric[absent_key], "0")
+                with (csv_dir / "prediction_timeline.csv").open(encoding="utf-8-sig", newline="") as stream:
+                    timeline = list(csv.DictReader(stream))
+                absent_prediction = "predicted_steam_g_h" if channel == "fuel" else "predicted_fuel_g_h"
+                absent_reason = "steam_mape_exclusion_reason" if channel == "fuel" else "fuel_mape_exclusion_reason"
+                self.assertTrue(all(row[absent_prediction] == "" for row in timeline))
+                self.assertTrue(all(row[absent_reason] == "prediction_missing" for row in timeline))
+                self.assertEqual(timeline[0]["timestamp_type"], "processing_time")
+                self.assertEqual(timeline[0]["source_video"], "clip.mkv")
+                with (csv_dir / "error_distribution.csv").open(encoding="utf-8-sig", newline="") as stream:
+                    errors = list(csv.DictReader(stream))
+                absent_error = "signed_error_steam_g_h" if channel == "fuel" else "signed_error_fuel_g_h"
+                self.assertTrue(all(row[absent_error] == "" for row in errors))
+                if channel == "fuel":
+                    self.assertEqual(errors[0]["signed_error_fuel_g_h"], "0")
+
     def test_generates_openable_pdf_and_all_csv_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

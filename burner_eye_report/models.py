@@ -33,12 +33,12 @@ class PredictionRow:
     source_unit: str
     expected_fuel: float
     expected_steam: float
-    predicted_fuel: float
-    predicted_steam: float
+    predicted_fuel: float | None
+    predicted_steam: float | None
     expected_fuel_g_h: float
     expected_steam_g_h: float
-    predicted_fuel_g_h: float
-    predicted_steam_g_h: float
+    predicted_fuel_g_h: float | None
+    predicted_steam_g_h: float | None
     trained_regime: bool
     predicted_regime: str
     regime_confidence: float | None
@@ -121,6 +121,23 @@ class ExperimentData:
     temporal_window_count: int = 0
 
     @property
+    def predicted_fuel_count(self) -> int:
+        return sum(row.predicted_fuel_g_h is not None for row in self.rows)
+
+    @property
+    def predicted_steam_count(self) -> int:
+        return sum(row.predicted_steam_g_h is not None for row in self.rows)
+
+    @property
+    def available_targets(self) -> set[str]:
+        targets: set[str] = set()
+        if self.predicted_fuel_count:
+            targets.add("fuel")
+        if self.predicted_steam_count:
+            targets.add("steam")
+        return targets
+
+    @property
     def blocking_issues(self) -> list[ValidationIssue]:
         return [issue for issue in self.issues if issue.blocking]
 
@@ -168,14 +185,18 @@ class MetricSet:
     mae_steam: float | None
     mape_steam: float | None
     mape_steam_count: int
+    mae_fuel_count: int = 0
+    mae_steam_count: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "record_count": self.record_count,
             "mae_fuel_g_h": self.mae_fuel,
+            "mae_fuel_record_count": self.mae_fuel_count,
             "mape_fuel_percent": self.mape_fuel,
             "mape_fuel_record_count": self.mape_fuel_count,
             "mae_steam_g_h": self.mae_steam,
+            "mae_steam_record_count": self.mae_steam_count,
             "mape_steam_percent": self.mape_steam,
             "mape_steam_record_count": self.mape_steam_count,
         }
@@ -198,9 +219,9 @@ class SelectedFrame:
     rank: int
     score: float
     score_method: str
-    abs_error_fuel: float
+    abs_error_fuel: float | None
     ape_fuel: float | None
-    abs_error_steam: float
+    abs_error_steam: float | None
     ape_steam: float | None
 
 

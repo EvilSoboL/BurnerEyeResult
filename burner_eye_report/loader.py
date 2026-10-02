@@ -122,7 +122,7 @@ def load_experiment(root: str | Path) -> ExperimentData:
             continue
 
         if any(
-            value < 0
+            value is not None and value < 0
             for value in (
                 parsed.expected_fuel,
                 parsed.expected_steam,
@@ -189,6 +189,11 @@ def load_experiment(root: str | Path) -> ExperimentData:
             blocking=True,
         )
         return experiment
+
+    if experiment.predicted_fuel_count == 0:
+        _issue(experiment, "info", "channel_unavailable", "В эксперименте нет прогнозов топлива.")
+    if experiment.predicted_steam_count == 0:
+        _issue(experiment, "info", "channel_unavailable", "В эксперименте нет прогнозов пара.")
 
     experiment.rows.sort(key=lambda row: row.timestamp)
     _build_regimes(experiment)
@@ -279,8 +284,10 @@ def _parse_row(raw: dict[str, str], row_number: int) -> PredictionRow:
 
     expected_fuel = _parse_finite(values["expected_fuel_flow"], "expected_fuel_flow")
     expected_steam = _parse_finite(values["expected_diluent_flow"], "expected_diluent_flow")
-    predicted_fuel = _parse_finite(values["predicted_fuel_flow"], "predicted_fuel_flow")
-    predicted_steam = _parse_finite(values["predicted_diluent_flow"], "predicted_diluent_flow")
+    predicted_fuel = _parse_optional_finite(values["predicted_fuel_flow"], "predicted_fuel_flow")
+    predicted_steam = _parse_optional_finite(values["predicted_diluent_flow"], "predicted_diluent_flow")
+    if predicted_fuel is None and predicted_steam is None:
+        raise ValueError("оба прогноза пусты")
 
     trained_text = values["trained_regime"]
     if trained_text not in {"0", "1"}:
@@ -300,8 +307,8 @@ def _parse_row(raw: dict[str, str], row_number: int) -> PredictionRow:
         predicted_steam=predicted_steam,
         expected_fuel_g_h=expected_fuel * factor,
         expected_steam_g_h=expected_steam * factor,
-        predicted_fuel_g_h=predicted_fuel * factor,
-        predicted_steam_g_h=predicted_steam * factor,
+        predicted_fuel_g_h=predicted_fuel * factor if predicted_fuel is not None else None,
+        predicted_steam_g_h=predicted_steam * factor if predicted_steam is not None else None,
         trained_regime=trained_text == "1",
         predicted_regime=values["regime"],
         regime_confidence=confidence,
@@ -350,6 +357,12 @@ def _parse_finite(value: str, field_name: str) -> float:
     if not math.isfinite(parsed):
         raise ValueError(f"{field_name} должно быть конечным числом")
     return parsed
+
+
+def _parse_optional_finite(value: str, field_name: str) -> float | None:
+    if not value:
+        return None
+    return _parse_finite(value, field_name)
 
 
 def _image_is_readable(path: Path) -> bool:

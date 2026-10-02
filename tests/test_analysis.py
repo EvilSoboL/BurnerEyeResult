@@ -66,6 +66,44 @@ def csv_row(
 
 
 class LoaderTests(unittest.TestCase):
+    def test_optional_prediction_channels_and_unit_normalization(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = datetime(2026, 7, 1, 12, 0, 0)
+            rows = [
+                csv_row(1, timestamp=now, unit="kg/h", predicted_fuel="", predicted_steam=0),
+                csv_row(2, timestamp=now + timedelta(seconds=1), unit="g/s", predicted_fuel=2, predicted_steam=" "),
+            ]
+            write_experiment(root, rows)
+            experiment = load_experiment(root)
+
+            self.assertEqual(len(experiment.rows), 2)
+            self.assertEqual(experiment.predicted_fuel_count, 1)
+            self.assertEqual(experiment.predicted_steam_count, 1)
+            self.assertEqual(experiment.available_targets, {"fuel", "steam"})
+            self.assertIsNone(experiment.rows[0].predicted_fuel_g_h)
+            self.assertEqual(experiment.rows[0].predicted_steam_g_h, 0)
+            self.assertEqual(experiment.rows[1].predicted_fuel_g_h, 7200)
+            self.assertIsNone(experiment.rows[1].predicted_steam_g_h)
+
+    def test_both_empty_and_invalid_optional_prediction_are_excluded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = datetime(2026, 7, 1, 12, 0, 0)
+            rows = [
+                csv_row(1, timestamp=now, predicted_fuel="", predicted_steam="  "),
+                csv_row(2, timestamp=now + timedelta(seconds=1), predicted_fuel="NaN", predicted_steam=2),
+                csv_row(3, timestamp=now + timedelta(seconds=2), predicted_fuel=3, predicted_steam="Inf"),
+                csv_row(4, timestamp=now + timedelta(seconds=3), predicted_fuel=0, predicted_steam=""),
+            ]
+            write_experiment(root, rows)
+            experiment = load_experiment(root)
+
+            self.assertEqual([row.frame_id for row in experiment.rows], ["4"])
+            self.assertEqual(experiment.excluded_rows, 3)
+            self.assertEqual(experiment.predicted_fuel_count, 1)
+            self.assertEqual(experiment.predicted_steam_count, 0)
+
     def test_equivalent_units_form_one_conflicting_regime(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -126,6 +164,67 @@ class LoaderTests(unittest.TestCase):
 
 
 class MetricsTests(unittest.TestCase):
+    def test_mixed_channel_metrics_and_frame_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = datetime(2026, 7, 1, 12, 0)
+            rows = [
+                csv_row(1, timestamp=now, fuel=100, steam=50, predicted_fuel=110, predicted_steam=""),
+                csv_row(2, timestamp=now + timedelta(seconds=1), fuel=100, steam=50, predicted_fuel="", predicted_steam=45),
+            ]
+            write_experiment(root, rows)
+            analysis = analyze_experiment(load_experiment(root))
+
+            metrics = analysis.overall_metrics
+            self.assertEqual(metrics.record_count, 2)
+            self.assertEqual((metrics.mae_fuel, metrics.mae_fuel_count), (10, 1))
+            self.assertEqual((metrics.mape_fuel, metrics.mape_fuel_count), (10, 1))
+            self.assertEqual((metrics.mae_steam, metrics.mae_steam_count), (5, 1))
+            self.assertEqual((metrics.mape_steam, metrics.mape_steam_count), (10, 1))
+            self.assertIsNone(analysis.row_metrics["1"]["signed_error_steam"])
+            self.assertIsNone(analysis.row_metrics["2"]["absolute_error_fuel"])
+            self.assertTrue(any("Состав каналов" in note for note in analysis.processing_notes))
+            self.assertTrue(all(frame.abs_error_fuel is None or frame.abs_error_steam is None for frame in analysis.selected_frames))
+
+    def test_fully_missing_channel_and_direction_conclusion(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = datetime(2026, 7, 1, 12, 0)
+            rows = [
+                csv_row(index, timestamp=now + timedelta(seconds=index), predicted_fuel=1000 + index, predicted_steam="")
+                for index in range(1, 5)
+            ]
+            write_experiment(root, rows)
+            analysis = analyze_experiment(load_experiment(root))
+
+            self.assertIsNone(analysis.overall_metrics.mae_steam)
+            self.assertIsNone(analysis.overall_metrics.mape_steam)
+            self.assertEqual(analysis.overall_metrics.mae_steam_count, 0)
+            self.assertEqual(analysis.overall_metrics.mape_steam_count, 0)
+            self.assertIn("недоступно", analysis.error_conclusions["overall_steam"])
+            self.assertTrue(all(frame.abs_error_steam is None for frame in analysis.selected_frames))
+
+    def test_stage_conclusion_requires_a_common_channel(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = datetime(2026, 7, 1, 12, 0)
+            rows = []
+            for index in range(6):
+                fuel_prediction = 1010 if index < 2 else (1010 if index < 4 else "")
+                steam_prediction = 790 if index >= 2 else ""
+                rows.append(
+                    csv_row(
+                        index + 1,
+                        timestamp=now + timedelta(seconds=index),
+                        predicted_fuel=fuel_prediction,
+                        predicted_steam=steam_prediction,
+                    )
+                )
+            write_experiment(root, rows)
+            analysis = analyze_experiment(load_experiment(root))
+
+            self.assertIn("нет каналов с сопоставимыми прогнозами", analysis.overall_conclusion)
+
     def test_zero_expected_is_kept_in_mae_and_excluded_from_mape(self) -> None:
         row = PredictionRow(
             timestamp=datetime(2026, 7, 1),

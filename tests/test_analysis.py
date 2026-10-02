@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta
@@ -66,6 +67,70 @@ def csv_row(
 
 
 class LoaderTests(unittest.TestCase):
+    def test_video_metadata_bom_linking_and_nonblocking_mismatches(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = datetime(2026, 7, 1, 12, 0, 0)
+            write_experiment(root, [csv_row(1, timestamp=now), csv_row(2, timestamp=now + timedelta(seconds=1))])
+            (root / "video_index.csv").write_text(
+                "\ufeffframe_id,source_video,start_s,end_s,source_frame_indices\n"
+                "1,clip.mkv,0,1,0;2;4\n1,dup.mkv,0,1,0;1\n2,clip.mkv,1,2,60;62;64\n9,extra.mkv,0,1,0;1\n",
+                encoding="utf-8",
+            )
+            source = {
+                "videos": [{
+                    "source_video": "clip.mkv", "status": "error", "stop_reason": "read failed",
+                    "completed_records": 1, "expected": {"fuel_flow": 999, "diluent_flow": 800, "unit": "g/h", "trained_regime": True},
+                    "window": {"num_frames": 3, "clip_duration_s": 1.0}, "model_path": "missing/model.pt",
+                }]
+            }
+            (root / "source.json").write_text("\ufeff" + json.dumps(source), encoding="utf-8")
+
+            experiment = load_experiment(root)
+
+            self.assertEqual(len(experiment.rows), 2)
+            self.assertIsNone(experiment.rows[0].video_metadata)
+            self.assertEqual(experiment.rows[1].video_metadata.source_frame_indices, [60, 62, 64])
+            self.assertEqual(experiment.video_sources[0].model_path, "missing/model.pt")
+            self.assertFalse(experiment.blocking_issues)
+            codes = {issue.code for issue in experiment.issues}
+            self.assertTrue({"video_index_duplicate_id", "video_index_missing_ids", "video_index_extra_ids", "source_completed_records_mismatch", "source_video_partial", "source_expected_mismatch"}.issubset(codes))
+
+    def test_damaged_optional_metadata_never_blocks_results(self) -> None:
+        for filename, contents, expected_code in (
+            ("source.json", "{bad json", "source_json_unreadable"),
+            ("video_index.csv", "wrong,columns\n1,x\n", "video_index_schema"),
+        ):
+            with self.subTest(filename=filename), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                write_experiment(root, [csv_row(1, timestamp=datetime(2026, 7, 1, 12, 0))])
+                (root / filename).write_text(contents, encoding="utf-8")
+
+                experiment = load_experiment(root)
+
+                self.assertEqual(len(experiment.rows), 1)
+                self.assertFalse(experiment.blocking_issues)
+                self.assertIn(expected_code, {issue.code for issue in experiment.issues})
+
+    def test_invalid_video_index_records_are_skipped_individually(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = datetime(2026, 7, 1, 12, 0, 0)
+            write_experiment(root, [csv_row(1, timestamp=now), csv_row(2, timestamp=now + timedelta(seconds=1))])
+            (root / "video_index.csv").write_text(
+                "frame_id,source_video,start_s,end_s,source_frame_indices\n"
+                "1,clip.mkv,2,1,0;1\n2,clip.mkv,1,2,4;2\n",
+                encoding="utf-8",
+            )
+
+            experiment = load_experiment(root)
+
+            self.assertEqual(len(experiment.rows), 2)
+            self.assertTrue(all(row.video_metadata is None for row in experiment.rows))
+            invalid = [issue for issue in experiment.issues if issue.code == "video_index_record_invalid"]
+            self.assertEqual(len(invalid), 2)
+            self.assertFalse(experiment.blocking_issues)
+
     def test_optional_prediction_channels_and_unit_normalization(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

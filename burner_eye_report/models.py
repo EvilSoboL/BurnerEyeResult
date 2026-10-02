@@ -46,6 +46,36 @@ class PredictionRow:
     image_path: Path | None = None
     temporal_frame_count: int = 0
     regime_id: str = ""
+    video_metadata: VideoIndexEntry | None = None
+
+
+@dataclass(slots=True)
+class VideoIndexEntry:
+    source_video: str
+    start_s: float
+    end_s: float
+    source_frame_indices: list[int]
+
+
+@dataclass(slots=True)
+class VideoSource:
+    source_video: str
+    status: str
+    stop_reason: str | None = None
+    completed_records: int | None = None
+    fps: float | None = None
+    width: int | None = None
+    height: int | None = None
+    frame_count: int | None = None
+    model_path: str | None = None
+    window_num_frames: int | None = None
+    clip_duration_s: float | None = None
+    expected_fuel: float | None = None
+    expected_steam: float | None = None
+    expected_unit: str | None = None
+    fuel_type: str | None = None
+    diluent_type: str | None = None
+    trained_regime: bool | None = None
 
 
 @dataclass(slots=True)
@@ -119,6 +149,7 @@ class ExperimentData:
     excluded_rows: int = 0
     orphan_frames: list[Path] = field(default_factory=list)
     temporal_window_count: int = 0
+    video_sources: list[VideoSource] = field(default_factory=list)
 
     @property
     def predicted_fuel_count(self) -> int:

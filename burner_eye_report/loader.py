@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import math
 import re
 from datetime import datetime, timezone
@@ -8,7 +9,7 @@ from pathlib import Path
 
 from PIL import Image as PillowImage
 
-from .models import ExperimentData, PredictionRow, Regime, ValidationIssue
+from .models import ExperimentData, PredictionRow, Regime, ValidationIssue, VideoIndexEntry, VideoSource
 
 
 REQUIRED_COLUMNS = {
@@ -195,6 +196,10 @@ def load_experiment(root: str | Path) -> ExperimentData:
     if experiment.predicted_steam_count == 0:
         _issue(experiment, "info", "channel_unavailable", "В эксперименте нет прогнозов пара.")
 
+    _load_video_sources(experiment)
+    _load_video_index(experiment)
+    _validate_video_provenance(experiment)
+
     experiment.rows.sort(key=lambda row: row.timestamp)
     _build_regimes(experiment)
 
@@ -263,6 +268,172 @@ def load_experiment(root: str | Path) -> ExperimentData:
             "Они войдут в MAE, но будут исключены из соответствующего MAPE.",
         )
     return experiment
+
+
+def _load_video_sources(experiment: ExperimentData) -> None:
+    path = experiment.root / "source.json"
+    if not path.is_file():
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        _issue(experiment, "warning", "source_json_unreadable", f"Не удалось прочитать source.json: {exc}")
+        return
+    videos = payload.get("videos") if isinstance(payload, dict) else None
+    if not isinstance(videos, list):
+        _issue(experiment, "warning", "source_json_schema", "В source.json ожидается массив videos.")
+        return
+
+    for number, item in enumerate(videos, start=1):
+        if not isinstance(item, dict) or not isinstance(item.get("source_video"), str) or not item["source_video"].strip():
+            _issue(experiment, "warning", "source_video_invalid", f"Запись videos[{number - 1}] не содержит имени source_video.")
+            continue
+        expected = item.get("expected") if isinstance(item.get("expected"), dict) else {}
+        window = item.get("window") if isinstance(item.get("window"), dict) else {}
+        completed = _optional_nonnegative_int(item.get("completed_records"))
+        if item.get("completed_records") is not None and completed is None:
+            _issue(experiment, "warning", "source_completed_records_invalid", f"Некорректный completed_records у видео {item['source_video']}.")
+        experiment.video_sources.append(VideoSource(
+            source_video=item["source_video"],
+            status=str(item.get("status", "")),
+            stop_reason=str(item["stop_reason"]) if item.get("stop_reason") is not None else None,
+            completed_records=completed,
+            fps=_optional_finite(item.get("fps")),
+            width=_optional_nonnegative_int(item.get("width")),
+            height=_optional_nonnegative_int(item.get("height")),
+            frame_count=_optional_nonnegative_int(item.get("frame_count")),
+            model_path=str(item["model_path"]) if item.get("model_path") is not None else None,
+            window_num_frames=_optional_nonnegative_int(window.get("num_frames")),
+            clip_duration_s=_optional_finite(window.get("clip_duration_s")),
+            expected_fuel=_optional_finite(expected.get("fuel_flow")),
+            expected_steam=_optional_finite(expected.get("diluent_flow")),
+            expected_unit=str(expected["unit"]) if expected.get("unit") is not None else None,
+            fuel_type=str(expected["fuel_type"]) if expected.get("fuel_type") is not None else None,
+            diluent_type=str(expected["diluent_type"]) if expected.get("diluent_type") is not None else None,
+            trained_regime=expected.get("trained_regime") if isinstance(expected.get("trained_regime"), bool) else None,
+        ))
+        if str(item.get("status", "")).casefold() == "error":
+            reason = str(item.get("stop_reason") or "Причина не указана")
+            _issue(experiment, "warning", "source_video_partial", f"Видео {item['source_video']} завершилось с ошибкой: {reason} Сохранено записей: {completed if completed is not None else 'не указано'}.")
+
+    declared = sum(video.completed_records or 0 for video in experiment.video_sources)
+    if any(video.completed_records is not None for video in experiment.video_sources) and declared != experiment.total_csv_rows:
+        _issue(experiment, "warning", "source_completed_records_mismatch", f"Сумма completed_records ({declared}) не совпадает с числом строк CSV ({experiment.total_csv_rows}).")
+
+
+def _load_video_index(experiment: ExperimentData) -> None:
+    path = experiment.root / "video_index.csv"
+    if not path.is_file():
+        return
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as stream:
+            reader = csv.DictReader(stream)
+            required = {"frame_id", "source_video", "start_s", "end_s", "source_frame_indices"}
+            headers = {str(header).strip() for header in (reader.fieldnames or []) if header}
+            missing = required - headers
+            if missing:
+                _issue(experiment, "warning", "video_index_schema", "В video_index.csv отсутствуют столбцы: " + ", ".join(sorted(missing)))
+                return
+            raw_rows = list(reader)
+    except (OSError, UnicodeError, csv.Error) as exc:
+        _issue(experiment, "warning", "video_index_unreadable", f"Не удалось прочитать video_index.csv: {exc}")
+        return
+
+    counts: dict[str, int] = {}
+    for raw in raw_rows:
+        key = str(raw.get("frame_id") or "").strip().casefold()
+        if key:
+            counts[key] = counts.get(key, 0) + 1
+    duplicates = {key for key, count in counts.items() if count > 1}
+    if duplicates:
+        _issue(experiment, "warning", "video_index_duplicate_id", f"В video_index.csv дублированы frame_id: {len(duplicates)}; эти связи пропущены.")
+
+    row_map = {row.frame_id.casefold(): row for row in experiment.rows}
+    linked: set[str] = set()
+    for line_number, raw in enumerate(raw_rows, start=2):
+        values = {str(key).strip(): (value or "").strip() for key, value in raw.items() if key}
+        key = values.get("frame_id", "").casefold()
+        if not key or key in duplicates:
+            continue
+        if key not in row_map:
+            continue
+        try:
+            source_video = values["source_video"]
+            if not source_video:
+                raise ValueError("пустой source_video")
+            start_s = _parse_finite(values["start_s"], "start_s")
+            end_s = _parse_finite(values["end_s"], "end_s")
+            if start_s < 0 or end_s < 0 or end_s <= start_s:
+                raise ValueError("интервал должен быть неотрицательным и end_s должен быть больше start_s")
+            text_indices = values["source_frame_indices"]
+            parts = text_indices.split(";") if text_indices else []
+            if not parts or any(not re.fullmatch(r"\d+", part) for part in parts):
+                raise ValueError("source_frame_indices должен содержать целые числа через ;")
+            indices = [int(part) for part in parts]
+            if any(right <= left for left, right in zip(indices, indices[1:])):
+                raise ValueError("source_frame_indices должны строго возрастать")
+            row_map[key].video_metadata = VideoIndexEntry(source_video, start_s, end_s, indices)
+            linked.add(key)
+        except (ValueError, KeyError) as exc:
+            _issue(experiment, "warning", "video_index_record_invalid", f"Запись video_index.csv, строка {line_number}, пропущена: {exc}")
+
+    missing = set(row_map) - linked
+    if missing:
+        _issue(experiment, "warning", "video_index_missing_ids", f"Для {len(missing)} строк results.csv нет корректной уникальной связи в video_index.csv.")
+    extra = set(counts) - set(row_map)
+    if extra:
+        _issue(experiment, "warning", "video_index_extra_ids", f"В video_index.csv найдено frame_id без строки results.csv: {len(extra)}.")
+
+
+def _validate_video_provenance(experiment: ExperimentData) -> None:
+    sources_by_name: dict[str, list[VideoSource]] = {}
+    for source in experiment.video_sources:
+        sources_by_name.setdefault(source.source_video.casefold(), []).append(source)
+    for source_video, sources in sources_by_name.items():
+        if len(sources) > 1:
+            _issue(experiment, "warning", "source_video_duplicate", f"source.json содержит повторные записи для {sources[0].source_video}; связь метаданных неоднозначна.")
+    for row in experiment.rows:
+        entry = row.video_metadata
+        if entry is None:
+            continue
+        candidates = sources_by_name.get(entry.source_video.casefold(), [])
+        if len(candidates) != 1:
+            continue
+        source = candidates[0]
+        if source.window_num_frames is not None and row.temporal_frame_count and source.window_num_frames != row.temporal_frame_count:
+            _issue(experiment, "warning", "source_window_mismatch", f"Число кадров окна для {entry.source_video} не совпадает с frames/{row.frame_id}.")
+        if source.clip_duration_s is not None and abs((entry.end_s - entry.start_s) - source.clip_duration_s) > 1e-6:
+            _issue(experiment, "warning", "source_window_duration_mismatch", f"Длительность окна {row.frame_id} не совпадает с source.json для {entry.source_video}.")
+        try:
+            factor = _parse_unit(source.expected_unit or "")[1]
+        except ValueError:
+            continue
+        if source.expected_fuel is not None and abs(source.expected_fuel * factor - row.expected_fuel_g_h) > 1e-6:
+            _issue(experiment, "warning", "source_expected_mismatch", f"Фактическая цель топлива в results.csv расходится с source.json для {entry.source_video}.")
+        if source.expected_steam is not None and abs(source.expected_steam * factor - row.expected_steam_g_h) > 1e-6:
+            _issue(experiment, "warning", "source_expected_mismatch", f"Фактическая цель пара в results.csv расходится с source.json для {entry.source_video}.")
+        if source.trained_regime is not None and source.trained_regime != row.trained_regime:
+            _issue(experiment, "warning", "source_trained_mismatch", f"trained_regime в results.csv расходится с source.json для {entry.source_video}.")
+
+
+def _optional_finite(value: object) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _optional_nonnegative_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 and str(parsed) == str(value) else None
 
 
 def _detect_delimiter(sample: str) -> str:

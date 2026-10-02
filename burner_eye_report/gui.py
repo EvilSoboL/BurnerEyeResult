@@ -18,6 +18,47 @@ TRAINED_LABEL = "Был в обучающей выборке"
 UNTRAINED_LABEL = "Не был в обучающей выборке"
 
 
+def resolve_experiment_directory(path: str | Path) -> Path:
+    """Resolve an explicit experiment or its unique experiment child (at most two levels)."""
+    root = Path(path).expanduser().resolve()
+    if not root.is_dir() or (root / "results.csv").is_file():
+        return root
+
+    def is_report_directory(candidate: Path) -> bool:
+        name = candidate.name.casefold()
+        return name.startswith(("prediction_report_", "model_comparison_"))
+
+    candidates: set[Path] = set()
+    try:
+        children = [entry for entry in root.iterdir() if entry.is_dir() and not is_report_directory(entry)]
+        for child in children:
+            if (child / "results.csv").is_file():
+                candidates.add(child.resolve())
+            try:
+                grandchildren = [entry for entry in child.iterdir() if entry.is_dir() and not is_report_directory(entry)]
+            except OSError:
+                continue
+            for candidate in grandchildren:
+                if (candidate / "results.csv").is_file():
+                    candidates.add(candidate.resolve())
+    except OSError:
+        return root
+
+    if len(candidates) == 1:
+        return next(iter(candidates))
+    if len(candidates) > 1:
+        listing = "\n".join(f"• {candidate}" for candidate in sorted(candidates, key=lambda item: str(item).casefold()))
+        raise ValueError(
+            "В выбранной папке найдено несколько экспериментов. Выберите конкретную папку с results.csv:\n"
+            + listing
+        )
+    return root
+
+
+def load_selected_experiment(path: str | Path) -> ExperimentData:
+    return load_experiment(resolve_experiment_directory(path))
+
+
 class BurnerEyeReportApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -44,6 +85,8 @@ class BurnerEyeReportApp(tk.Tk):
             "untrained": tk.StringVar(value="0"),
             "conflicts": tk.StringVar(value="0"),
             "frames": tk.StringVar(value="0 / 0"),
+            "fuel_predictions": tk.StringVar(value="0"),
+            "steam_predictions": tk.StringVar(value="0"),
         }
         self.comparison_first_path_var = tk.StringVar()
         self.comparison_second_path_var = tk.StringVar()
@@ -56,6 +99,7 @@ class BurnerEyeReportApp(tk.Tk):
             "first_rows": tk.StringVar(value="0"),
             "second_rows": tk.StringVar(value="0"),
             "excluded": tk.StringVar(value="0 / 0"),
+            "targets": tk.StringVar(value="—"),
         }
 
         self._configure_styles()
@@ -133,7 +177,7 @@ class BurnerEyeReportApp(tk.Tk):
 
         summary = ttk.Frame(report_workspace, padding=(10, 0, 10, 10))
         summary.grid(row=1, column=0, sticky="ew")
-        for index in range(6):
+        for index in range(len(self.summary_vars)):
             summary.columnconfigure(index, weight=1, uniform="summary")
         cards = [
             ("rows", "корректных записей"),
@@ -142,10 +186,12 @@ class BurnerEyeReportApp(tk.Tk):
             ("untrained", "необученных"),
             ("conflicts", "неразрешённых конфликтов"),
             ("frames", "кадров / строк"),
+            ("fuel_predictions", "прогнозов топлива"),
+            ("steam_predictions", "прогнозов пара"),
         ]
         for index, (key, caption) in enumerate(cards):
             card = ttk.Frame(summary, style="Card.TFrame", padding=(12, 9))
-            card.grid(row=0, column=index, sticky="nsew", padx=(0 if index == 0 else 4, 0 if index == 5 else 4))
+            card.grid(row=0, column=index, sticky="nsew", padx=(0 if index == 0 else 4, 0 if index == len(cards) - 1 else 4))
             ttk.Label(card, textvariable=self.summary_vars[key], style="Metric.TLabel").pack(anchor="w")
             ttk.Label(card, text=caption, style="MetricCaption.TLabel").pack(anchor="w")
 
@@ -353,13 +399,14 @@ class BurnerEyeReportApp(tk.Tk):
 
         summary = ttk.Frame(tab, padding=(10, 0, 10, 10))
         summary.grid(row=1, column=0, sticky="ew")
-        for index in range(4):
+        for index in range(5):
             summary.columnconfigure(index, weight=1, uniform="comparison_summary")
         cards = [
             ("common", "общих режимов"),
             ("first_rows", "строк модели 1 в общих режимах"),
             ("second_rows", "строк модели 2 в общих режимах"),
             ("excluded", "исключено режимов: модель 1 / 2"),
+            ("targets", "общих прогнозируемых каналов"),
         ]
         for index, (key, caption) in enumerate(cards):
             card = ttk.Frame(summary, style="Card.TFrame", padding=(12, 9))
@@ -367,7 +414,7 @@ class BurnerEyeReportApp(tk.Tk):
                 row=0,
                 column=index,
                 sticky="nsew",
-                padx=(0 if index == 0 else 4, 0 if index == 3 else 4),
+                padx=(0 if index == 0 else 4, 0 if index == len(cards) - 1 else 4),
             )
             ttk.Label(
                 card,
@@ -397,12 +444,9 @@ class BurnerEyeReportApp(tk.Tk):
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
         columns = (
-            "regime",
-            "first_rows",
-            "second_rows",
-            "first_mape",
-            "second_mape",
-            "winner",
+            "regime", "first_rows", "second_rows",
+            "fuel_first", "fuel_second", "fuel_winner",
+            "steam_first", "steam_second", "steam_winner",
         )
         self.comparison_tree = ttk.Treeview(
             table_frame,
@@ -413,17 +457,23 @@ class BurnerEyeReportApp(tk.Tk):
             "regime": "Общий режим",
             "first_rows": "Строк модели 1",
             "second_rows": "Строк модели 2",
-            "first_mape": "MAPE топлива, модель 1",
-            "second_mape": "MAPE топлива, модель 2",
-            "winner": "Меньший MAPE топлива",
+            "fuel_first": "Топливо, модель 1",
+            "fuel_second": "Топливо, модель 2",
+            "fuel_winner": "Итог по топливу",
+            "steam_first": "Пар, модель 1",
+            "steam_second": "Пар, модель 2",
+            "steam_winner": "Итог по пару",
         }
         widths = {
             "regime": 330,
             "first_rows": 110,
             "second_rows": 110,
-            "first_mape": 145,
-            "second_mape": 145,
-            "winner": 180,
+            "fuel_first": 120,
+            "fuel_second": 120,
+            "fuel_winner": 170,
+            "steam_first": 120,
+            "steam_second": 120,
+            "steam_winner": 170,
         }
         for column in columns:
             self.comparison_tree.heading(column, text=headings[column])
@@ -431,8 +481,8 @@ class BurnerEyeReportApp(tk.Tk):
                 column,
                 width=widths[column],
                 minwidth=80,
-                stretch=column in {"regime", "winner"},
-                anchor="w" if column in {"regime", "winner"} else "center",
+                stretch=column in {"regime", "fuel_winner", "steam_winner"},
+                anchor="w" if column in {"regime", "fuel_winner", "steam_winner"} else "center",
             )
         self.comparison_tree.grid(row=0, column=0, sticky="nsew")
         scroll_y = ttk.Scrollbar(
@@ -535,7 +585,7 @@ class BurnerEyeReportApp(tk.Tk):
 
         def work() -> None:
             try:
-                result = load_experiment(path)
+                result = load_selected_experiment(path)
                 self.events.put(("loaded", result))
             except Exception as exc:
                 self.events.put(("load_error", exc))
@@ -578,8 +628,14 @@ class BurnerEyeReportApp(tk.Tk):
 
         def work() -> None:
             try:
-                first = load_experiment(first_path)
-                second = load_experiment(second_path)
+                resolved_first = resolve_experiment_directory(first_path)
+                resolved_second = resolve_experiment_directory(second_path)
+                if resolved_first == resolved_second:
+                    raise ValueError(
+                        "Обе папки разрешаются в один эксперимент. Выберите два разных эксперимента."
+                    )
+                first = load_experiment(resolved_first)
+                second = load_experiment(resolved_second)
                 result = analyze_comparison(first, second)
                 self.events.put(("comparison_loaded", result))
             except Exception as exc:
@@ -696,6 +752,12 @@ class BurnerEyeReportApp(tk.Tk):
 
     def _finish_loading(self, experiment: object) -> None:
         assert isinstance(experiment, ExperimentData)
+        try:
+            selected_path = Path(self.path_var.get()).expanduser().resolve()
+        except OSError:
+            selected_path = experiment.root
+        auto_resolved = experiment.root != selected_path
+        self.path_var.set(str(experiment.root))
         self.busy = False
         self.experiment = experiment
         self.progress.stop()
@@ -707,10 +769,16 @@ class BurnerEyeReportApp(tk.Tk):
             )
         elif experiment.conflict_count:
             self.status_var.set(
-                f"Проверка завершена. Разрешите конфликтов: {experiment.conflict_count}."
+                f"Проверка завершена. Прогнозы: топливо — {experiment.predicted_fuel_count}, "
+                f"пар — {experiment.predicted_steam_count}. Разрешите конфликтов: {experiment.conflict_count}."
             )
         else:
-            self.status_var.set("Проверка завершена. Эксперимент готов к отчёту.")
+            self.status_var.set(
+                f"Проверка завершена. Прогнозы: топливо — {experiment.predicted_fuel_count}, "
+                f"пар — {experiment.predicted_steam_count}. Эксперимент готов к отчёту."
+            )
+        if auto_resolved:
+            self.status_var.set(self.status_var.get() + " Выбрана единственная вложенная папка с results.csv.")
         self._refresh_controls()
 
     def _finish_report(self, report_path: object) -> None:
@@ -730,6 +798,8 @@ class BurnerEyeReportApp(tk.Tk):
         assert isinstance(comparison, ComparisonAnalysis)
         self.busy = False
         self.comparison = comparison
+        self.comparison_first_path_var.set(str(comparison.first.root))
+        self.comparison_second_path_var.set(str(comparison.second.root))
         self.comparison_progress.stop()
         self.comparison_progress.configure(mode="determinate", value=0)
         self._populate_comparison()
@@ -738,6 +808,7 @@ class BurnerEyeReportApp(tk.Tk):
         )
         self.comparison_status_var.set(
             f"Найдено общих режимов: {len(comparison.common_regimes)}. "
+            f"Общие цели: {self._format_targets(comparison.comparable_targets)}. "
             f"Исключено режимов вне пересечения: {excluded_count}."
         )
         self._refresh_controls()
@@ -801,6 +872,7 @@ class BurnerEyeReportApp(tk.Tk):
             self.comparison_tree.delete(item)
         for value in self.comparison_summary_vars.values():
             value.set("0")
+        self.comparison_summary_vars["targets"].set("—")
 
     def _populate_comparison(self) -> None:
         self._clear_comparison()
@@ -808,11 +880,13 @@ class BurnerEyeReportApp(tk.Tk):
         if comparison is None:
             return
         for index, item in enumerate(comparison.common_regimes, start=1):
-            winner = metric_winner(
-                item.first_metrics.mape_fuel,
-                item.second_metrics.mape_fuel,
-                comparison.first_name,
-                comparison.second_name,
+            fuel_first, fuel_second, fuel_result = self._format_comparison_channel(
+                item.first_metrics, item.second_metrics, "fuel",
+                comparison.first_name, comparison.second_name,
+            )
+            steam_first, steam_second, steam_result = self._format_comparison_channel(
+                item.first_metrics, item.second_metrics, "steam",
+                comparison.first_name, comparison.second_name,
             )
             self.comparison_tree.insert(
                 "",
@@ -822,9 +896,12 @@ class BurnerEyeReportApp(tk.Tk):
                     item.display_name,
                     len(item.first_regime.rows),
                     len(item.second_regime.rows),
-                    self._format_gui_mape(item.first_metrics.mape_fuel),
-                    self._format_gui_mape(item.second_metrics.mape_fuel),
-                    winner,
+                    fuel_first,
+                    fuel_second,
+                    fuel_result,
+                    steam_first,
+                    steam_second,
+                    steam_result,
                 ),
             )
         self.comparison_summary_vars["common"].set(
@@ -840,10 +917,33 @@ class BurnerEyeReportApp(tk.Tk):
             f"{len(comparison.first_only_regimes)} / "
             f"{len(comparison.second_only_regimes)}"
         )
+        self.comparison_summary_vars["targets"].set(self._format_targets(comparison.comparable_targets))
 
     @staticmethod
-    def _format_gui_mape(value: float | None) -> str:
-        return "Нет данных" if value is None else f"{value:.3f}%"
+    def _format_targets(targets: set[str]) -> str:
+        labels = [label for key, label in (("fuel", "топливо"), ("steam", "пар")) if key in targets]
+        return ", ".join(labels) if labels else "нет"
+
+    @staticmethod
+    def _format_comparison_channel(first, second, channel: str, first_name: str, second_name: str):
+        first_mae = getattr(first, f"mae_{channel}")
+        second_mae = getattr(second, f"mae_{channel}")
+        first_count = getattr(first, f"mae_{channel}_count")
+        second_count = getattr(second, f"mae_{channel}_count")
+        if not first_count or not second_count:
+            missing = "Нет сопоставимых данных"
+            return missing, missing, missing
+        first_mape = getattr(first, f"mape_{channel}")
+        second_mape = getattr(second, f"mape_{channel}")
+        if first_mape is not None and second_mape is not None:
+            unit = "%"
+            first_value, second_value = first_mape, second_mape
+            winner = metric_winner(first_mape, second_mape, first_name, second_name)
+        else:
+            unit = "г/ч"
+            first_value, second_value = first_mae, second_mae
+            winner = metric_winner(first_mae, second_mae, first_name, second_name)
+        return f"{first_value:.3f} {unit}", f"{second_value:.3f} {unit}", winner
 
     def _upsert_regime(self, regime: Regime) -> None:
         check_label = (
@@ -921,6 +1021,8 @@ class BurnerEyeReportApp(tk.Tk):
         self.summary_vars["frames"].set(
             f"{experiment.primary_frame_count} / {len(experiment.rows)}"
         )
+        self.summary_vars["fuel_predictions"].set(str(experiment.predicted_fuel_count))
+        self.summary_vars["steam_predictions"].set(str(experiment.predicted_steam_count))
 
     def _set_busy_controls(self) -> None:
         self.choose_button.configure(state="disabled")

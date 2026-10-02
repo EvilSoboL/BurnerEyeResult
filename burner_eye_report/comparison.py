@@ -41,6 +41,16 @@ class ComparisonAnalysis:
     second_overall_metrics: MetricSet
 
     @property
+    def comparable_targets(self) -> set[str]:
+        targets: set[str] = set()
+        for regime in self.common_regimes:
+            if regime.first_metrics.mae_fuel_count and regime.second_metrics.mae_fuel_count:
+                targets.add("fuel")
+            if regime.first_metrics.mae_steam_count and regime.second_metrics.mae_steam_count:
+                targets.add("steam")
+        return targets
+
+    @property
     def first_common_rows(self) -> list[PredictionRow]:
         return [
             row
@@ -93,13 +103,7 @@ def analyze_comparison(
         )
 
     first_name, second_name = _model_names(first, second)
-    first_rows = [
-        row for comparison in common_regimes for row in comparison.first_regime.rows
-    ]
-    second_rows = [
-        row for comparison in common_regimes for row in comparison.second_regime.rows
-    ]
-    return ComparisonAnalysis(
+    result = ComparisonAnalysis(
         first=first,
         second=second,
         first_name=first_name,
@@ -119,8 +123,46 @@ def analyze_comparison(
                 key=lambda item: (item[1], item[0]),
             )
         ],
-        first_overall_metrics=calculate_metrics(first_rows),
-        second_overall_metrics=calculate_metrics(second_rows),
+        first_overall_metrics=_comparison_metrics(common_regimes, first_side=True),
+        second_overall_metrics=_comparison_metrics(common_regimes, first_side=False),
+    )
+    if not result.comparable_targets:
+        raise ValueError(
+            "В общих режимах нет общей предсказываемой величины: обе модели "
+            "должны иметь прогноз топлива или пара хотя бы в одном общем режиме."
+        )
+    return result
+
+
+def _comparison_metrics(
+    regimes: list[CommonRegimeComparison],
+    *,
+    first_side: bool,
+) -> MetricSet:
+    record_count = sum(
+        len(item.first_regime.rows if first_side else item.second_regime.rows)
+        for item in regimes
+    )
+    selected: dict[str, list[PredictionRow]] = {"fuel": [], "steam": []}
+    for item in regimes:
+        first_metrics, second_metrics = item.first_metrics, item.second_metrics
+        rows = item.first_regime.rows if first_side else item.second_regime.rows
+        if first_metrics.mae_fuel_count and second_metrics.mae_fuel_count:
+            selected["fuel"].extend(row for row in rows if row.predicted_fuel_g_h is not None)
+        if first_metrics.mae_steam_count and second_metrics.mae_steam_count:
+            selected["steam"].extend(row for row in rows if row.predicted_steam_g_h is not None)
+    fuel = calculate_metrics(selected["fuel"])
+    steam = calculate_metrics(selected["steam"])
+    return MetricSet(
+        record_count=record_count,
+        mae_fuel=fuel.mae_fuel,
+        mape_fuel=fuel.mape_fuel,
+        mape_fuel_count=fuel.mape_fuel_count,
+        mae_steam=steam.mae_steam,
+        mape_steam=steam.mape_steam,
+        mape_steam_count=steam.mape_steam_count,
+        mae_fuel_count=fuel.mae_fuel_count,
+        mae_steam_count=steam.mae_steam_count,
     )
 
 
@@ -130,12 +172,8 @@ def metric_winner(
     first_name: str,
     second_name: str,
 ) -> str:
-    if first_value is None and second_value is None:
-        return "Нет данных"
-    if first_value is None:
-        return second_name
-    if second_value is None:
-        return first_name
+    if first_value is None or second_value is None:
+        return "Нет сопоставимых данных"
     if math.isclose(first_value, second_value, rel_tol=1e-9, abs_tol=1e-9):
         return "Одинаково"
     return first_name if first_value < second_value else second_name
